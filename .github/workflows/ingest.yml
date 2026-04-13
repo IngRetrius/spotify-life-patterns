@@ -1,8 +1,5 @@
 name: Spotify Ingestion Pipeline
 
-# Cuando corre:
-# 1. Automaticamente cada 6 horas (cron)
-# 2. Manualmente desde GitHub Actions tab (workflow_dispatch)
 on:
   schedule:
     - cron: '0 */6 * * *'   # 00:00, 06:00, 12:00, 18:00 UTC
@@ -23,46 +20,22 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
-      # Solo las librerias que necesita la ingesta
       - name: Install dependencies
-        run: pip install spotipy psycopg2-binary python-dotenv
+        run: pip install spotipy psycopg2-binary python-dotenv pandas sqlalchemy
 
       # Reconstruye el .cache de Spotify desde el secret
-      # spotipy usa el refresh_token para renovar el access_token sin navegador
       - name: Restore Spotify token cache
         run: echo '${{ secrets.SPOTIFY_CACHE }}' > .cache
 
-      # ── Paso 1: Plays ─────────────────────────────────────────────────────
-      # Trae los ultimos 50 tracks reproducidos y hace upsert en raw_plays
-      - name: Run plays ingestion
+      # ── Pipeline completo ─────────────────────────────────────────────────
+      # Corre los 6 pasos: ingesta (3) + transformacion (3)
+      - name: Run full pipeline
         env:
           SPOTIFY_CLIENT_ID:     ${{ secrets.SPOTIFY_CLIENT_ID }}
           SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
           SPOTIFY_REDIRECT_URI:  ${{ secrets.SPOTIFY_REDIRECT_URI }}
           SUPABASE_DB_PASSWORD:  ${{ secrets.SUPABASE_DB_PASSWORD }}
-        run: python ingestion/ingest_plays.py
-
-      # ── Paso 2: Audio Features ────────────────────────────────────────────
-      # Enriquece los tracks nuevos con BPM, energy, valence, etc.
-      # Si el endpoint retorna 403 (restringido), guarda NULLs y sigue
-      - name: Run audio features ingestion
-        env:
-          SPOTIFY_CLIENT_ID:     ${{ secrets.SPOTIFY_CLIENT_ID }}
-          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
-          SPOTIFY_REDIRECT_URI:  ${{ secrets.SPOTIFY_REDIRECT_URI }}
-          SUPABASE_DB_PASSWORD:  ${{ secrets.SUPABASE_DB_PASSWORD }}
-        run: python ingestion/ingest_audio_features.py
-
-      # ── Paso 3: Artistas ──────────────────────────────────────────────────
-      # Trae nombre y generos de artistas nuevos
-      # Si el endpoint retorna 403, usa el nombre ya guardado en raw_plays
-      - name: Run artists ingestion
-        env:
-          SPOTIFY_CLIENT_ID:     ${{ secrets.SPOTIFY_CLIENT_ID }}
-          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
-          SPOTIFY_REDIRECT_URI:  ${{ secrets.SPOTIFY_REDIRECT_URI }}
-          SUPABASE_DB_PASSWORD:  ${{ secrets.SUPABASE_DB_PASSWORD }}
-        run: python ingestion/ingest_artists.py
+        run: python scripts/run_pipeline.py
 
       - name: Summary
         if: always()
