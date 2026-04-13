@@ -1,84 +1,83 @@
-# Decisión: Audio Features no disponibles — ajuste de estrategia
+# Decision: Audio Features unavailable — strategy adjustment
 
-## Qué pasó
+## What happened
 
-Al ejecutar `ingest_audio_features.py`, el endpoint `/audio-features` retornó
-**HTTP 403** — acceso denegado, no solo deprecated.
+When running `ingest_audio_features.py`, the `/audio-features` endpoint returned
+**HTTP 403** — access denied, not just deprecated.
 
 ```
 GET /v1/audio-features/?ids=...  →  403 Forbidden
 ```
 
-## Por qué ocurre
+## Why this happens
 
-Spotify segmentó sus endpoints en niveles de acceso. A partir de 2024,
-`/audio-features` requiere aprobación manual ("Extended Access") que Spotify
-otorga solo a aplicaciones comerciales verificadas. Las apps nuevas en
-Development Mode reciben 403 directamente.
+Spotify segmented its endpoints into access tiers. Since 2024,
+`/audio-features` requires manual approval ("Extended Access") that Spotify
+grants only to verified commercial applications. New apps in Development
+Mode receive 403 directly.
 
-Esto es independiente de la etiqueta "deprecated" — el endpoint fue deprecado
-Y restringido al mismo tiempo.
+This is independent of the "deprecated" label — the endpoint was deprecated
+AND restricted at the same time.
 
-## Impacto en el diseño
+## Impact on the design
 
-**Features que perdemos:**
+**Features we lose:**
 - tempo (BPM)
 - energy, danceability, valence
 - acousticness, instrumentalness
 - loudness, speechiness, liveness
 
-**Features que conservamos** (sin necesidad de ese endpoint):
+**Features we keep** (no dependency on that endpoint):
 
-| Feature | Fuente | Cómo se calcula |
+| Feature | Source | How it is computed |
 |---|---|---|
-| `duration_minutes` | raw_plays | sum(duration_ms) / 60000 por sesión |
-| `n_tracks` | raw_plays | count de tracks por sesión |
-| `n_skips` | raw_plays | tracks donde escuchado < 50% de duration_ms |
+| `duration_minutes` | raw_plays | sum(duration_ms) / 60000 per session |
+| `n_tracks` | raw_plays | count of tracks per session |
+| `n_skips` | raw_plays | tracks where listened < 50% of duration_ms |
 | `hour_of_day` | raw_plays.played_at | EXTRACT(hour FROM played_at) |
 | `day_of_week` | raw_plays.played_at | EXTRACT(dow FROM played_at) |
-| `dominant_genre` | raw_artists.genres | moda de géneros en la sesión |
+| `dominant_genre` | raw_artists.genres | mode of genres in the session |
 
-## Ajuste en las reglas heurísticas
+## Adjustment to the heuristic rules
 
-Las actividades se infieren con las features disponibles:
+Activities are inferred with the features still available:
 
 ```
-DUCHA
+SHOWER
   - duration_minutes BETWEEN 5 AND 15
-  - n_skips < 2  (no puede interactuar con el telefono)
+  - n_skips < 2  (cannot interact with the phone)
   - hour_of_day IN (6,7,8,9) OR hour_of_day IN (21,22,23)
 
-GIMNASIO
+GYM
   - duration_minutes BETWEEN 45 AND 90
-  - n_skips < 5  (musica continua)
-  - Patron recurrente: mismo day_of_week, misma hour_of_day
+  - n_skips < 5  (continuous music)
+  - Recurring pattern: same day_of_week, same hour_of_day
 
-TRABAJO / CONCENTRACION
+WORK / FOCUS
   - duration_minutes > 90
   - hour_of_day BETWEEN 8 AND 18
-  - day_of_week BETWEEN 0 AND 4  (lunes a viernes)
+  - day_of_week BETWEEN 0 AND 4  (Monday to Friday)
 
-DESCANSO / NOCHE
+REST / NIGHT
   - hour_of_day BETWEEN 22 AND 24 OR hour_of_day IN (0, 1)
-  - n_skips bajo (escucha pasiva)
+  - low n_skips (passive listening)
 
-MOTO
-  - Sesion continua (gap entre canciones < 5 min)
-  - n_skips = 0  (no puede interactuar)
+MOTORCYCLE
+  - Continuous session (gap between tracks < 5 min)
+  - n_skips = 0  (cannot interact)
   - duration_minutes variable
 ```
 
-## Por qué esto importa para el portfolio
+## Why this matters for the portfolio
 
-Documentar que el endpoint fue restringido y que el proyecto se adaptó
-demuestra capacidad de reacción ante cambios de API — algo muy común
-en Data Engineering real. Un pipeline que depende de un solo endpoint
-sin manejo de errores es frágil; este proyecto lo resuelve con degradación
-elegante (NULL storage + reglas ajustadas).
+Documenting that the endpoint was restricted and that the project adapted to
+it demonstrates the ability to respond to API changes — something very common
+in real Data Engineering work. A pipeline that depends on a single endpoint
+with no error handling is fragile; this project handles it with graceful
+degradation (NULL storage + adjusted rules).
 
-## Estado en raw_audio_features
+## Status in raw_audio_features
 
-Los 50 tracks en raw_plays quedaron registrados en raw_audio_features
-con todos los campos en NULL (excepto track_id). Esto evita que el
-pipeline reintente fetchear features en cada corrida futura, desperdiciando
-llamadas API que van a fallar de todas formas.
+The 50 tracks in raw_plays were recorded in raw_audio_features with every
+field NULL (except track_id). This prevents the pipeline from retrying to
+fetch features on every future run, wasting API calls that would fail anyway.

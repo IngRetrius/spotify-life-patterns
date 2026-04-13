@@ -1,13 +1,13 @@
-# Decisiones de diseño — Base de datos
+# Design Decisions — Database
 
-> Este archivo documenta el razonamiento detrás de cada decisión de diseño del schema.
-> Es la respuesta a "¿por qué diseñaste la base de datos así?" en una entrevista.
+> This document records the reasoning behind every schema decision.
+> It is the answer to "why did you design the database this way?" in an interview.
 
 ---
 
-## La decisión más importante: dos capas separadas
+## The most important decision: two separate layers
 
-El schema tiene 6 tablas divididas en dos grupos con propósitos completamente distintos:
+The schema has 6 tables split into two groups with completely different purposes:
 
 ```
 RAW LAYER (Bronze)        ANALYTICS LAYER (Silver/Gold)
@@ -17,149 +17,150 @@ raw_audio_features        session_features
 raw_artists               activity_labels
 ```
 
-**Raw layer** = datos tal como llegaron de la API de Spotify. Nunca se modifican.
+**Raw layer** = data exactly as it arrived from the Spotify API. Never modified.
 
-**Analytics layer** = datos calculados por nosotros. Se pueden borrar y recalcular.
+**Analytics layer** = data we compute. Can be dropped and recomputed at any time.
 
-### Por qué importa esta separación
+### Why this separation matters
 
-Imagina que en 3 meses cambias la lógica de cómo defines una "sesión" (por ejemplo,
-de 30 minutos de gap a 20 minutos). Con esta separación:
+Imagine that in three months you change how a "session" is defined (e.g. from
+a 30-minute gap to a 20-minute gap). With this separation:
 
-- Borras `sessions`, `session_features`, `activity_labels`
-- Corres de nuevo la transformación
-- Los datos crudos siguen intactos en `raw_plays`
+- Drop `sessions`, `session_features`, `activity_labels`
+- Re-run the transformation
+- The raw data stays intact in `raw_plays`
 
-Sin esta separación, perderías los datos originales de Spotify para siempre.
+Without this separation, you would lose the original Spotify data forever.
 
-Este patrón tiene nombre: **Medallion Architecture** (Bronze → Silver → Gold).
-Es el estándar en la industria — lo usan Databricks, Snowflake, dbt.
+This pattern has a name: **Medallion Architecture** (Bronze → Silver → Gold).
+It is the industry standard — used by Databricks, Snowflake, dbt.
 
 ---
 
-## Por qué `sessions`, `session_features` y `activity_labels` son 3 tablas y no 1
+## Why `sessions`, `session_features` and `activity_labels` are three tables instead of one
 
-Podrías haber puesto todo en una tabla `sessions` con 20 columnas. No se hizo así
-porque cada tabla tiene una **razón de cambio diferente**:
+You could have put everything in a single `sessions` table with 20 columns.
+That was rejected because each table has a **different reason to change**:
 
-| Tabla | Responde a | Cambia cuando |
+| Table | Answers | Changes when |
 |---|---|---|
-| `sessions` | ¿Cuándo ocurrió esta sesión? | Cambia la definición de gap (30 min) |
-| `session_features` | ¿Cómo sonó musicalmente? | Cambian los audio features que usamos |
-| `activity_labels` | ¿Qué actividad era? | Cambian las reglas o el modelo de ML |
+| `sessions` | When did this session occur? | The gap definition changes (30 min) |
+| `session_features` | How did it sound musically? | The audio features we use change |
+| `activity_labels` | What activity was it? | The rules or the ML model change |
 
-Esto se llama **Single Responsibility Principle** aplicado a tablas.
+This is the **Single Responsibility Principle** applied to tables.
 
-Beneficio concreto: cuando en fase 2 reemplaces las reglas heurísticas por un modelo
-de ML, solo tocas `activity_labels`. Las sesiones y sus features no cambian.
+Concrete benefit: when the heuristic rules are replaced by an ML model in phase 2,
+only `activity_labels` changes. Sessions and their features stay untouched.
 
 ---
 
-## `UNIQUE (track_id, played_at)` — idempotencia del pipeline
+## `UNIQUE (track_id, played_at)` — pipeline idempotency
 
 ```sql
 UNIQUE (track_id, played_at)
 ```
 
-El cron corre cada 6 horas. Spotify retorna los últimos 50 tracks. Una canción
-reproducida a las 5pm puede aparecer en el run de las 4pm Y en el de las 6pm.
+The cron runs every 6 hours. Spotify returns the last 50 tracks. A song played
+at 5pm can appear both in the 4pm run and in the 6pm run.
 
-Sin este constraint: la misma reproducción se insertaría dos veces, tus sesiones
-quedarían duplicadas, y tus métricas del dashboard serían incorrectas.
+Without this constraint: the same play would be inserted twice, sessions would
+be duplicated, and dashboard metrics would be wrong.
 
-Con este constraint: el insert hace **upsert** — inserta si no existe, ignora si ya
-está. Puedes correr el pipeline 100 veces sobre los mismos datos y el resultado
-siempre es el mismo.
+With this constraint: the insert becomes an **upsert** — inserts if it does not
+exist, ignores if it does. You can run the pipeline 100 times over the same
+data and the result is always the same.
 
-**Propiedad que esto garantiza: idempotencia.**
+**The property this guarantees: idempotency.**
 
-> En Data Engineering, un pipeline idempotente es uno donde ejecutarlo N veces
-> produce exactamente el mismo resultado que ejecutarlo 1 vez. Es una propiedad
-> fundamental para tener pipelines confiables.
+> In Data Engineering, an idempotent pipeline is one where running it N times
+> produces exactly the same result as running it once. It is a fundamental
+> property for building reliable pipelines.
 
 ---
 
-## `TIMESTAMPTZ` y no `TIMESTAMP`
+## `TIMESTAMPTZ` and not `TIMESTAMP`
 
 ```sql
 played_at TIMESTAMPTZ NOT NULL
 ```
 
-| Tipo | Comportamiento |
+| Type | Behavior |
 |---|---|
-| `TIMESTAMP` | Guarda la hora sin zona horaria. Lo que insertes es lo que queda. |
-| `TIMESTAMPTZ` | Guarda en UTC internamente. Convierte al timezone del cliente al leer. |
+| `TIMESTAMP` | Stores the time without a timezone. What you insert is what you get back. |
+| `TIMESTAMPTZ` | Stores in UTC internally. Converts to the client timezone on read. |
 
-Spotify reporta `played_at` en UTC. Colombia está en UTC-5. Si usaras `TIMESTAMP`
-y mezclaras timestamps de distintas fuentes, tus análisis por hora del día quedarían
-desfasados 5 horas.
+Spotify reports `played_at` in UTC. Colombia is UTC-5. Using `TIMESTAMP` and
+mixing timestamps from different sources would leave your hour-of-day analysis
+off by 5 hours.
 
-**Regla general:** siempre UTC en la base de datos. Convierte al timezone del usuario
-solo en la capa de presentación (el dashboard en Streamlit).
+**General rule:** always store UTC in the database. Convert to the user's
+timezone only at the presentation layer (the Streamlit dashboard).
 
 ---
 
-## `TEXT[]` para géneros — arrays nativos de Postgres
+## `TEXT[]` for genres — native Postgres arrays
 
 ```sql
-genres TEXT[]   -- ejemplo: ["reggaeton", "latin pop", "urbano latino"]
+genres TEXT[]   -- example: ["reggaeton", "latin pop", "urbano latino"]
 ```
 
-Un artista tiene múltiples géneros en Spotify. Las alternativas evaluadas:
+An artist has multiple genres in Spotify. The alternatives considered:
 
-| Opción | Por qué se descartó |
+| Option | Why rejected |
 |---|---|
-| `TEXT` con JSON string `'["reggaeton","pop"]'` | Difícil de filtrar. `LIKE '%reggaeton%'` es frágil y lento |
-| Tabla separada `artist_genres` | Overkill — agrega un JOIN en cada query por una relación simple |
-| `TEXT[]` array nativo | Filtrable, indexable, sin overhead |
+| `TEXT` with JSON string `'["reggaeton","pop"]'` | Hard to filter. `LIKE '%reggaeton%'` is brittle and slow |
+| Separate `artist_genres` table | Overkill — adds a JOIN to every query for a simple relationship |
+| `TEXT[]` native array | Filterable, indexable, zero overhead |
 
-Con array nativo puedes hacer queries limpias:
+With a native array you can write clean queries:
 ```sql
--- Todas las sesiones donde el artista es reggaeton
+-- All sessions where the artist is reggaeton
 SELECT * FROM raw_artists WHERE 'reggaeton' = ANY(genres);
 ```
 
 ---
 
-## `ON DELETE CASCADE` — integridad referencial
+## `ON DELETE CASCADE` — referential integrity
 
 ```sql
 session_id UUID REFERENCES sessions(session_id) ON DELETE CASCADE
 ```
 
-`session_features` y `activity_labels` no tienen significado sin su sesión padre.
-Si borras una sesión (para recalcular), el `CASCADE` borra automáticamente sus
-features y labels asociados.
+`session_features` and `activity_labels` have no meaning without their parent
+session. If you delete a session (to recompute), `CASCADE` automatically deletes
+the associated features and labels.
 
-Sin `CASCADE`: quedarían **filas huérfanas** — datos que referencian una sesión que
-ya no existe. Eso corrompe silenciosamente tus análisis porque los JOINs devuelven
-resultados incorrectos sin lanzar ningún error.
+Without `CASCADE`: you would be left with **orphan rows** — data pointing to a
+session that no longer exists. That silently corrupts your analysis because
+JOINs return incorrect results without raising any error.
 
 ---
 
-## UUIDs vs enteros autoincrement
+## UUIDs vs auto-increment integers
 
 ```sql
 id UUID DEFAULT gen_random_uuid() PRIMARY KEY
 ```
 
-| Primary key | Cómo funciona |
+| Primary key | How it works |
 |---|---|
-| `SERIAL` / `BIGSERIAL` | La base de datos genera el ID al hacer INSERT. No sabes el ID antes de insertar. |
-| `UUID` | Puedes generar el ID en Python antes de insertar. |
+| `SERIAL` / `BIGSERIAL` | The database generates the ID on INSERT. You do not know the ID before inserting. |
+| `UUID` | You can generate the ID in Python before inserting. |
 
-En el pipeline de transformación, cuando construyes una sesión en Python, necesitas
-el `session_id` para insertar en `sessions` Y en `session_features` al mismo tiempo.
+In the transformation pipeline, when you build a session in Python, you need
+the `session_id` in order to insert into `sessions` AND `session_features` at
+the same time.
 
-Con UUID: generas `session_id = uuid.uuid4()` en Python y lo usas en ambos inserts
-directamente.
+With UUID: you generate `session_id = uuid.uuid4()` in Python and use it in
+both inserts directly.
 
-Con SERIAL: harías INSERT en `sessions`, luego SELECT para obtener el ID generado,
-luego INSERT en `session_features`. Dos roundtrips a la base de datos en lugar de uno.
+With SERIAL: you would INSERT into `sessions`, then SELECT to get the generated
+ID, then INSERT into `session_features`. Two database round-trips instead of one.
 
 ---
 
-## Los índices — por qué esos y no otros
+## The indexes — why these and not others
 
 ```sql
 CREATE INDEX idx_raw_plays_played_at   ON raw_plays (played_at DESC);
@@ -168,40 +169,39 @@ CREATE INDEX idx_sessions_start_time   ON sessions  (start_time DESC);
 CREATE INDEX idx_activity_labels_label ON activity_labels (activity_label);
 ```
 
-Cada índice existe porque hay una query frecuente que lo justifica:
+Each index exists because there is a frequent query that justifies it:
 
-| Índice | Query que acelera |
+| Index | Query it accelerates |
 |---|---|
-| `played_at DESC` | Construcción de sesiones: ordenar todos los plays por tiempo |
-| `track_id` | JOIN con `raw_audio_features` para enriquecer cada play |
-| `start_time DESC` | Dashboard: "sesiones de esta semana / último mes" |
-| `activity_label` | Dashboard: "todas las sesiones de gym" |
+| `played_at DESC` | Session construction: order all plays by time |
+| `track_id` | JOIN with `raw_audio_features` to enrich each play |
+| `start_time DESC` | Dashboard: "sessions this week / last month" |
+| `activity_label` | Dashboard: "all gym sessions" |
 
-**Por qué no se indexó todo:** cada índice tiene un costo en velocidad de escritura
-(el índice se actualiza en cada INSERT). Solo se crean índices donde el patrón de
-lectura lo justifica.
+**Why we did not index everything:** each index has a write-speed cost (the
+index is updated on every INSERT). Indexes are only created where the read
+pattern justifies them.
 
 ---
 
-## Resumen ejecutivo para entrevistas
+## Executive summary for interviews
 
-Tres principios aplicados en este diseño:
+Three principles applied in this design:
 
-1. **Inmutabilidad del dato crudo** (Medallion Architecture)
-   Los datos de la API nunca se modifican. Todo procesamiento produce tablas nuevas.
-   Permite reprocesar sin perder información original.
+1. **Immutability of raw data** (Medallion Architecture)
+   API data is never modified. All processing produces new tables.
+   Lets you reprocess without losing the original information.
 
-2. **Single Responsibility por tabla**
-   Cada tabla tiene una sola razón de cambiar. Facilita evolucionar el pipeline
-   por partes sin afectar el resto.
+2. **Single Responsibility per table**
+   Each table has exactly one reason to change. Makes it possible to evolve
+   the pipeline in parts without affecting the rest.
 
-3. **Idempotencia por constraints**
-   El `UNIQUE (track_id, played_at)` hace el pipeline re-ejecutable de forma segura.
-   Los pipelines confiables son idempotentes por diseño, no por suerte.
+3. **Idempotency through constraints**
+   `UNIQUE (track_id, played_at)` makes the pipeline safely re-runnable.
+   Reliable pipelines are idempotent by design, not by luck.
 
-> Respuesta corta para entrevista:
-> "Separé raw de analytics para tener datos inmutables y poder reprocesar sin perder
-> información. Dentro de analytics apliqué Single Responsibility para que cada capa
-> de la transformación pueda cambiar de forma independiente. Los constraints de
-> unicidad hacen el pipeline idempotente — puedo correrlo N veces sin efectos
-> secundarios."
+> Short interview answer:
+> "I separated raw from analytics to keep immutable data and reprocess without
+> losing information. Inside analytics I applied Single Responsibility so each
+> transformation layer can evolve independently. Uniqueness constraints make
+> the pipeline idempotent — I can run it N times with no side effects."

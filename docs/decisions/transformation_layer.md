@@ -1,186 +1,189 @@
-# Capa de Transformacion — Decisiones de diseno
+# Transformation Layer — Design Decisions
 
-## Los tres pasos y por que ese orden
+## The three steps and why that order
 
 ```
 build_sessions.py → compute_features.py → label_activities.py
 ```
 
-Cada paso depende del anterior y tiene una sola responsabilidad.
-No se pueden reordenar porque cada uno lee lo que el anterior escribio.
+Each step depends on the previous one and has a single responsibility.
+They cannot be reordered because each one reads what the previous one wrote.
 
 ---
 
-## 1. build_sessions.py — construccion de sesiones
+## 1. build_sessions.py — session construction
 
-### Algoritmo de agrupacion
+### Grouping algorithm
 
 ```
-plays ordenados por played_at:
+plays ordered by played_at:
   A (3:00) → B (3:04) → C (3:09) → [gap 45 min] → D (3:54) → ...
 
-gap entre C y D = 45 min > 30 min = nueva sesion
+gap between C and D = 45 min > 30 min = new session
 
-Sesion 1: A, B, C
-Sesion 2: D, ...
+Session 1: A, B, C
+Session 2: D, ...
 ```
 
-### Por que session_id es deterministico (uuid5)
+### Why session_id is deterministic (uuid5)
 
 `session_id = uuid5(NAMESPACE_URL, start_time.isoformat())`
 
-Con UUID aleatorio: cada vez que reconstruyes sesiones, los IDs cambian.
-Las referencias desde `session_features` y `activity_labels` quedan huerfanas.
+With a random UUID: every time you rebuild sessions, the IDs change.
+References from `session_features` and `activity_labels` end up orphaned.
 
-Con UUID deterministico: el mismo start_time siempre produce el mismo ID.
-Puedes reconstruir sesiones N veces y el upsert es seguro.
+With a deterministic UUID: the same start_time always produces the same ID.
+You can rebuild sessions N times and the upsert remains safe.
 
-### Calculo de end_time
+### Computing end_time
 
-`end_time = played_at del ultimo track + su duration_ms`
+`end_time = played_at of the last track + its duration_ms`
 
-No es simplemente el `played_at` del ultimo track, porque ese timestamp marca
-*cuando empezo* esa cancion. Si la sesion termina con una cancion de 3 minutos,
-el fin real de la sesion es 3 minutos despues.
+It is not simply the `played_at` of the last track, because that timestamp
+marks *when that song started*. If the session ends with a 3-minute track,
+the real end of the session is 3 minutes later.
 
-### Por que pandas y no SQL puro
+### Why pandas and not pure SQL
 
-La logica de agrupacion por gap requiere comparar cada fila con la anterior.
-En SQL esto requiere window functions y self-joins que son verbosos.
-En pandas: `df["gap"] = df["played_at"] - df["played_at"].shift(1)` — una linea.
+Gap-based grouping logic requires comparing each row to the previous one.
+In SQL that needs window functions and self-joins that are verbose.
+In pandas: `df["gap"] = df["played_at"] - df["played_at"].shift(1)` — one line.
 
-Para datasets pequeños (< millones de filas), pandas en memoria es suficiente.
-En una arquitectura con Spark o dbt, esta logica se traduciria a SQL con LAG().
+For small datasets (< millions of rows), in-memory pandas is sufficient.
+In a Spark- or dbt-based architecture this logic would translate to SQL
+with `LAG()`.
 
 ---
 
-## 2. compute_features.py — features por sesion
+## 2. compute_features.py — features per session
 
-### Deteccion de skips
+### Skip detection
 
 ```
-Un track es "skip" si:
+A track is a "skip" if:
   played_at[i+1] - played_at[i] < duration_ms[i] * 0.5
 ```
 
-Es decir: si la siguiente cancion empezo antes de que terminara la mitad de la actual.
+That is: if the next song started before half of the current one had played.
 
-No podemos saber directamente si el usuario apreto "siguiente" — solo vemos timestamps.
-Este proxy es una aproximacion: no captura pausas largas ni escuchas lentas.
+We cannot directly know whether the user pressed "next" — we only see
+timestamps. This proxy is an approximation: it does not capture long pauses
+or slow listening.
 
-### merge_asof para asignar plays a sesiones
+### merge_asof to assign plays to sessions
 
-En lugar de un JOIN con condicion de rango (lento para datasets grandes),
-usamos `pd.merge_asof`: un merge ordenado que para cada play encuentra
-la sesion con `start_time <= played_at`. Luego filtramos los que superan `end_time`.
+Instead of a range-condition JOIN (slow on large datasets), we use
+`pd.merge_asof`: an ordered merge that for each play finds the session
+with `start_time <= played_at`. Afterwards we filter out any plays that
+exceed `end_time`.
 
-### Audio features en NULL
+### Audio features as NULL
 
-Con el endpoint restringido, `avg_bpm`, `avg_energy`, etc. son NULL.
-Se guardan igualmente en `session_features` para cuando el endpoint
-vuelva a estar disponible o se use una fuente alternativa.
+With the endpoint restricted, `avg_bpm`, `avg_energy`, etc. are NULL.
+They are still stored in `session_features` for the day the endpoint is
+available again or is replaced with an alternative source.
 
 ---
 
-## 3. label_activities.py — etiquetado heuristico
+## 3. label_activities.py — heuristic labeling
 
-### Por que reglas y no ML desde el inicio
+### Why rules and not ML from the start
 
-1. No hay datos suficientes para entrenar (50 plays = 4 sesiones)
-2. Las reglas son auditables y explicables — sabes exactamente por que
-   una sesion se etiqueto como "gimnasio"
-3. Las reglas generan el dataset de entrenamiento para ML en fase 2
+1. There is not enough data to train on (50 plays = 4 sessions)
+2. Rules are auditable and explainable — you know exactly why a session
+   was labeled as "gym"
+3. The rules generate the training dataset for ML in phase 2
 
-### Por que 3 actividades (no 5)
+### Why 3 activities (not 5)
 
-El diseno original tenia 5 reglas: ducha, gimnasio, moto, trabajo, descanso.
-El problema: sin audio features, moto y trabajo son indistinguibles solo
-por duracion y hora. Una sesion de 103 minutos a las 3am se etiquetaba
-como "moto" cuando claramente es estudio nocturno.
+The original design had 5 rules: shower, gym, motorcycle, work, rest.
+The problem: without audio features, motorcycle and work are
+indistinguishable by duration and hour alone. A 103-minute session at 3am
+was being labeled as "motorcycle" when it was clearly late-night studying.
 
-Decision: reducir a 3 actividades con senales temporales claras y mutuamente
-exclusivas:
+Decision: reduce to 3 activities with clear, mutually exclusive temporal
+signals:
 
-| Actividad | Senal dominante          | Diferenciador de hora        |
-|-----------|--------------------------|------------------------------|
-| ducha     | Duracion muy corta 5-20m | Manana (6-10h) o noche (20-23h) |
-| gimnasio  | Duracion 35-110m         | Dia/tarde (5-10h o 16-22h)   |
-| tareas    | Duracion > 40m           | Madrugada (0-5h o 22-23h)    |
+| Activity | Dominant signal       | Hour differentiator             |
+|----------|-----------------------|---------------------------------|
+| shower   | Very short, 5–20 min  | Morning (6–10h) or night (20–23h) |
+| gym      | Duration 35–110 min   | Day/afternoon (5–10h or 16–22h) |
+| tasks    | Duration > 40 min     | Late night (0–5h or 22–23h)     |
 
-El bonus de hora es el discriminador clave: gimnasio y tareas pueden
-durar lo mismo (60-90 min), pero el gym no ocurre a las 3am.
+The hour bonus is the key discriminator: gym and tasks can last the same
+(60–90 min), but gym does not happen at 3am.
 
-### Sistema de confidence scores
+### Confidence score system
 
-Cada regla suma puntos por condicion cumplida (total posible = 1.0).
-Se elige la regla con mayor score. Si ninguna supera 0.4 → "desconocido".
+Each rule adds points per condition satisfied (max total = 1.0).
+The rule with the highest score wins. If none exceeds 0.4 → "unknown".
 
 ```python
-SHOWER_HOURS      = set(range(6, 11))  | set(range(20, 24))   # 6-10h y 20-23h
-GYM_HOURS         = set(range(5, 11))  | set(range(16, 23))   # 5-10h y 16-22h
-NIGHT_STUDY_HOURS = set(range(22, 24)) | set(range(0, 6))     # 22-23h y 0-5h
+SHOWER_HOURS      = set(range(6, 11))  | set(range(20, 24))   # 6-10h and 20-23h
+GYM_HOURS         = set(range(5, 11))  | set(range(16, 23))   # 5-10h and 16-22h
+NIGHT_STUDY_HOURS = set(range(22, 24)) | set(range(0, 6))     # 22-23h and 0-5h
 
-def rule_ducha(row):     # max 0.5 + 0.3 + 0.2 = 1.0
-    if 5 <= duration <= 20:        score += 0.5  # condicion principal
-    if n_skips == 0:               score += 0.3  # no puede tocar el telefono
-    if hour in SHOWER_HOURS:       score += 0.2  # horario tipico de aseo
+def rule_shower(row):   # max 0.5 + 0.3 + 0.2 = 1.0
+    if 5 <= duration <= 20:        score += 0.5  # primary condition
+    if n_skips == 0:               score += 0.3  # cannot touch the phone
+    if hour in SHOWER_HOURS:       score += 0.2  # typical grooming hours
 
-def rule_gimnasio(row):  # max 0.4 + 0.3 + 0.3 = 1.0
-    if 35 <= duration <= 110:      score += 0.4  # duracion tipica
-    if n_skips <= 2:               score += 0.3  # musica continua
-    if hour in GYM_HOURS:          score += 0.3  # 5-10am o 4-10pm
+def rule_gym(row):      # max 0.4 + 0.3 + 0.3 = 1.0
+    if 35 <= duration <= 110:      score += 0.4  # typical workout duration
+    if n_skips <= 2:               score += 0.3  # continuous music
+    if hour in GYM_HOURS:          score += 0.3  # 5-10am or 4-10pm
 
-def rule_tareas(row):    # max 0.5 + 0.2 + 0.3 = 1.0
-    if duration > 40:              score += 0.5  # sesion larga
-    if n_skips <= 5:               score += 0.2  # musica de fondo
-    if hour in NIGHT_STUDY_HOURS:  score += 0.3  # madrugada = estudio
+def rule_tasks(row):    # max 0.5 + 0.2 + 0.3 = 1.0
+    if duration > 40:              score += 0.5  # long session
+    if n_skips <= 5:               score += 0.2  # background music
+    if hour in NIGHT_STUDY_HOURS:  score += 0.3  # late night = studying
 ```
 
-Resultados con las 4 sesiones actuales:
+Results for the current 4 sessions:
 
-| Sesion       | Dur    | Hora | Skips | Etiqueta  | Score |
-|--------------|--------|------|-------|-----------|-------|
-| 38e0b333...  | 103.5m | 3h   | 0     | tareas    | 1.00  |
-| 74ca3bf1...  | 14.5m  | 17h  | 0     | ducha     | 0.80  |
-| 44158cee...  | 62.3m  | 20h  | 2     | gimnasio  | 1.00  |
-| 83e34a9d...  | 2.6m   | 23h  | 0     | ducha     | 0.50  |
+| Session      | Dur    | Hour | Skips | Label   | Score |
+|--------------|--------|------|-------|---------|-------|
+| 38e0b333...  | 103.5m | 3h   | 0     | tasks   | 1.00  |
+| 74ca3bf1...  | 14.5m  | 17h  | 0     | shower  | 0.80  |
+| 44158cee...  | 62.3m  | 20h  | 2     | gym     | 1.00  |
+| 83e34a9d...  | 2.6m   | 23h  | 0     | shower  | 0.50  |
 
-El score no es una probabilidad estadistica — es una medida de cuantas
-condiciones se cumplen. Con mas datos, se puede reemplazar con un clasificador
-que si produzca probabilidades reales.
+The score is not a statistical probability — it is a measure of how many
+conditions are satisfied. With more data it can be replaced with a classifier
+that produces real probabilities.
 
 ---
 
-## El orquestador run_pipeline.py
+## The orchestrator run_pipeline.py
 
-Ejecuta los 6 pasos en orden. Caracteristicas clave:
+Runs the 6 steps in order. Key features:
 
-- `--from N`: permite empezar desde el paso N. Util para reejecutar solo
-  la transformacion sin volver a llamar la API de Spotify.
-- Si un paso falla, el pipeline se detiene — no escribe resultados parciales.
-- Mide el tiempo de cada paso: util para identificar cuellos de botella.
+- `--from N`: start from step N. Useful for re-running only the
+  transformation without calling the Spotify API again.
+- If a step fails, the pipeline stops — no partial results are written.
+- Measures the time of each step: useful for identifying bottlenecks.
 
 ```bash
-python scripts/run_pipeline.py          # pipeline completo
-python scripts/run_pipeline.py --from 4 # solo transformacion
+python scripts/run_pipeline.py          # full pipeline
+python scripts/run_pipeline.py --from 4 # transformation only
 ```
 
 ---
 
-## Flujo de datos completo
+## Full data flow
 
 ```
 Spotify API
     ↓ ingest_plays.py
-raw_plays (50 filas)
+raw_plays (50 rows)
     ↓ ingest_audio_features.py
-raw_audio_features (50 filas, features en NULL por restriccion API)
+raw_audio_features (50 rows, features NULL due to API restriction)
     ↓ ingest_artists.py
-raw_artists (33 filas, genres en NULL por restriccion API)
+raw_artists (33 rows, genres NULL due to API restriction)
     ↓ build_sessions.py
-sessions (4 sesiones agrupadas por gap < 30 min)
+sessions (4 sessions grouped by gap < 30 min)
     ↓ compute_features.py
-session_features (4 registros: n_skips calculado, audio features NULL)
+session_features (4 records: n_skips computed, audio features NULL)
     ↓ label_activities.py
-activity_labels (4 etiquetas: moto, moto, gimnasio, descanso)
+activity_labels (4 labels: shower/gym/tasks + confidence)
 ```

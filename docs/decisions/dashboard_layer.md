@@ -1,51 +1,53 @@
-# Capa de Visualización — Decisiones de diseño
+# Visualization Layer — Design Decisions
 
-> Este archivo documenta el razonamiento detrás de cada decisión del dashboard.
-> Es la respuesta a "¿por qué diseñaste la visualización así?" en una entrevista.
+> This document records the reasoning behind every dashboard decision.
+> It is the answer to "why did you design the visualization this way?" in an
+> interview.
 
 ---
 
-## Por qué Streamlit y no Power BI, Metabase o Grafana
+## Why Streamlit and not Power BI, Metabase or Grafana
 
-Las alternativas más comunes para dashboards de datos:
+The most common alternatives for data dashboards:
 
-| Herramienta | Por qué se descartó |
+| Tool | Why rejected |
 |---|---|
-| Power BI / Tableau | Requieren licencia, no se deployan como código, difícil de versionar |
-| Metabase / Grafana | Excelentes para equipos de operaciones, no para portfolios de ingeniería |
-| Dash (Plotly) | Más flexible, pero requiere más boilerplate para un resultado similar |
-| Flask + D3.js | Control total, pero el costo de desarrollo es desproporcionado para este caso |
-| **Streamlit** | Se deploya con una línea, el código es Python puro, se versiona en git como cualquier script |
+| Power BI / Tableau | Require licenses, not deployable as code, hard to version |
+| Metabase / Grafana | Excellent for operations teams, not for engineering portfolios |
+| Dash (Plotly) | More flexible, but needs more boilerplate for a similar result |
+| Flask + D3.js | Full control, but the development cost is disproportionate here |
+| **Streamlit** | Deploys in one line, the code is pure Python, versioned in git like any script |
 
-La ventaja clave de Streamlit en un portfolio de Data Engineering es que **el dashboard es
-código**. Un entrevistador puede leer `app.py` y entender exactamente cómo se construyó
-la visualización, qué queries se hacen, cómo se manejan las dependencias de datos.
+The key advantage of Streamlit in a Data Engineering portfolio is that **the
+dashboard is code**. An interviewer can read `app.py` and understand exactly
+how the visualization was built, which queries run, and how data dependencies
+are handled.
 
-Con Power BI o Metabase, eso no es posible.
+That is not possible with Power BI or Metabase.
 
 ---
 
-## Por qué `queries.py` separado de `app.py`
+## Why `queries.py` is separate from `app.py`
 
-Toda la lógica SQL vive en `dashboard/queries.py`. El `app.py` solo define el layout.
+All SQL logic lives in `dashboard/queries.py`. `app.py` only defines the layout.
 
 ```
 dashboard/
-├── app.py       ← qué se muestra y cómo (layout, CSS, charts)
-└── queries.py   ← qué datos se traen y cómo (SQL, engine, transformaciones)
+├── app.py       ← what is shown and how (layout, CSS, charts)
+└── queries.py   ← what data is loaded and how (SQL, engine, transforms)
 ```
 
-**Razón principal: separación de responsabilidades.**
+**Main reason: separation of concerns.**
 
-Si cambia el schema de la base de datos (por ejemplo, se agrega una columna),
-solo hay que modificar `queries.py`. El layout de `app.py` no se toca.
+If the database schema changes (for instance, a new column), only `queries.py`
+needs to change. The layout in `app.py` stays untouched.
 
-Si en el futuro se migra de Supabase a otro motor (BigQuery, Redshift),
-se reescribe `queries.py` y `app.py` queda intacto.
+If we later migrate from Supabase to another engine (BigQuery, Redshift),
+we rewrite `queries.py` and `app.py` remains intact.
 
-Esto también hace que las queries sean testeables de forma aislada:
+This also makes queries testable in isolation:
 ```bash
-# Verificar que todas las queries funcionan sin lanzar el servidor Streamlit
+# Verify all queries work without launching the Streamlit server
 python -c "
 from dashboard.queries import get_engine, load_kpis, load_sessions
 engine = get_engine()
@@ -58,77 +60,80 @@ print(load_sessions(engine).shape)
 
 ## `@st.cache_resource` vs `@st.cache_data`
 
-Streamlit tiene dos tipos de caché con propósitos distintos:
+Streamlit has two cache types with different purposes:
 
-| Decorator | Para qué sirve | Cuándo se invalida |
+| Decorator | What for | When it invalidates |
 |---|---|---|
-| `@st.cache_resource` | Objetos que no se pueden serializar (conexiones, modelos ML) | Solo al reiniciar el servidor |
-| `@st.cache_data` | Datos serializables (DataFrames, dicts, listas) | Al cambiar los argumentos o al expirar el TTL |
+| `@st.cache_resource` | Non-serializable objects (connections, ML models) | Only on server restart |
+| `@st.cache_data` | Serializable data (DataFrames, dicts, lists) | When arguments change or the TTL expires |
 
-En el dashboard se usan así:
+They are used in the dashboard like this:
 
 ```python
 @st.cache_resource
 def _engine():
-    # El engine de SQLAlchemy gestiona un pool de conexiones.
-    # Crearlo una vez y reutilizarlo evita abrir una nueva conexion
-    # en cada interaccion del usuario con la pagina.
+    # The SQLAlchemy engine manages a connection pool.
+    # Creating it once and reusing it avoids opening a new connection
+    # on every page interaction.
     return get_engine()
 
 @st.cache_data
 def _sessions():
-    # El DataFrame se cachea en memoria.
-    # Cada vez que un usuario abre la pagina obtiene los mismos datos
-    # sin hacer una query adicional a Supabase.
+    # The DataFrame is cached in memory.
+    # Every user who opens the page gets the same data
+    # without issuing an extra query to Supabase.
     return load_sessions(_engine())
 ```
 
-**Por qué no usar `@st.cache_data` para el engine:**
-El engine contiene un pool de conexiones activas que no se puede serializar (pickle).
-Intentarlo lanza un error. `@st.cache_resource` está diseñado exactamente para esto.
+**Why not use `@st.cache_data` for the engine:**
+The engine holds a pool of live connections that cannot be serialized (pickled).
+Attempting to do so raises an error. `@st.cache_resource` is designed exactly
+for this.
 
-**Por qué no usar `@st.cache_resource` para los DataFrames:**
-`@st.cache_resource` comparte el objeto entre todos los usuarios sin copiarlo.
-Si una función modificara el DataFrame (aunque aquí no ocurre), todos los usuarios
-verían el dato modificado. `@st.cache_data` hace una copia por cada usuario.
+**Why not use `@st.cache_resource` for DataFrames:**
+`@st.cache_resource` shares the object across all users without copying it.
+If a function modified the DataFrame (not the case here), every user would see
+the modified data. `@st.cache_data` returns a per-user copy.
 
 ---
 
-## Por qué SQLAlchemy y no psycopg2 directo
+## Why SQLAlchemy and not raw psycopg2
 
 ```python
-# Forma que genera un warning en pandas >= 2.0:
+# Form that raises a warning in pandas >= 2.0:
 df = pd.read_sql(query, psycopg2_conn)
 
-# Forma correcta:
+# Correct form:
 df = pd.read_sql(query, sqlalchemy_engine)
 ```
 
-A partir de pandas 2.0, `read_sql` requiere un engine de SQLAlchemy o una URL de
-conexión. Pasar una conexión psycopg2 cruda genera un `UserWarning` y en versiones
-futuras de pandas dejará de funcionar.
+Starting with pandas 2.0, `read_sql` requires a SQLAlchemy engine or a
+connection URL. Passing a raw psycopg2 connection raises a `UserWarning` and
+will stop working in future pandas versions.
 
-Además, SQLAlchemy gestiona automáticamente un **pool de conexiones**: en lugar de
-abrir y cerrar una conexión TCP por cada query, reutiliza las existentes. Con el
-pooler de Supabase (modo transaction, puerto 6543) esto reduce la latencia notablemente.
+SQLAlchemy also manages a **connection pool** automatically: instead of
+opening and closing a TCP connection per query, it reuses existing ones.
+With the Supabase pooler (transaction mode, port 6543) this noticeably
+reduces latency.
 
 ---
 
-## El patrón `_get_password()` — dos fuentes de credenciales
+## The `_get_password()` pattern — two credential sources
 
-El dashboard necesita funcionar en dos ambientes con formas distintas de pasar secretos:
+The dashboard must work in two environments with different ways of passing
+secrets:
 
-| Ambiente | Cómo se leen las credenciales |
+| Environment | How credentials are read |
 |---|---|
-| Local | `python-dotenv` carga `.env` como variables de entorno → `os.getenv()` |
-| Streamlit Cloud | Los secrets del dashboard se acceden via `st.secrets`, NO son env vars automáticas |
+| Local | `python-dotenv` loads `.env` as environment variables → `os.getenv()` |
+| Streamlit Cloud | Dashboard secrets are accessed via `st.secrets`, NOT as env vars |
 
 ```python
 def _get_password() -> str:
-    # 1. Intenta como variable de entorno (funciona local con .env)
+    # 1. Try as an environment variable (works locally with .env)
     password = os.getenv("SUPABASE_DB_PASSWORD")
 
-    # 2. Si no esta, intenta Streamlit Cloud secrets
+    # 2. If absent, try Streamlit Cloud secrets
     if not password:
         try:
             import streamlit as st
@@ -136,7 +141,7 @@ def _get_password() -> str:
         except Exception:
             pass
 
-    # 3. Si no hay en ninguna fuente, falla con un mensaje claro
+    # 3. If missing everywhere, fail with a clear message
     if not password:
         raise EnvironmentError(
             "SUPABASE_DB_PASSWORD not found. "
@@ -145,115 +150,118 @@ def _get_password() -> str:
     return password
 ```
 
-Este patrón evita tener dos versiones del archivo de conexión (una para local, una para
-deploy) y hace explícito el orden de prioridad de fuentes.
+This pattern avoids having two versions of the connection file (one for local,
+one for deploy) and makes the source-priority order explicit.
 
 ---
 
-## Por qué la conversión de timezone ocurre en SQL y no en Python
+## Why timezone conversion happens in SQL and not in Python
 
 ```sql
--- En queries.py:
+-- In queries.py:
 s.start_time AT TIME ZONE 'America/Bogota' AS start_time
 ```
 
-La alternativa sería traer el timestamp en UTC y convertirlo en Python:
+The alternative would be to fetch the timestamp in UTC and convert it in Python:
 ```python
 df["start_time"] = df["start_time"].dt.tz_convert("America/Bogota")
 ```
 
-Se eligió SQL por dos razones:
+SQL was chosen for two reasons:
 
-1. **Los datos llegan ya en el timezone correcto.** El DataFrame no necesita ser
-   manipulado después de cargarse — lo que lees es lo que el usuario ve.
+1. **Data arrives already in the correct timezone.** The DataFrame does not
+   need to be manipulated after loading — what you read is what the user sees.
 
-2. **Centraliza la lógica de presentación en un solo lugar.** Cualquier query que
-   exponga timestamps al usuario los convierte en la misma capa (SQL), en vez de
-   depender de que cada fragmento de código Python recuerde hacer la conversión.
+2. **Centralizes presentation logic in one place.** Any query that exposes
+   timestamps to the user converts them in the same layer (SQL), instead of
+   relying on every Python snippet to remember the conversion.
 
-La regla general: guarda siempre en UTC, convierte al timezone del usuario en la
-capa de presentación. Aquí esa capa es la query SQL del dashboard.
+General rule: always store in UTC, convert to the user's timezone at the
+presentation layer. Here that layer is the dashboard's SQL query.
 
 ---
 
-## Por qué Plotly y no Altair (el default de Streamlit)
+## Why Plotly and not Altair (Streamlit's default)
 
-Streamlit incluye Altair como visualización integrada. Se eligió Plotly porque:
+Streamlit ships Altair as its integrated visualization. Plotly was chosen
+because:
 
-| Característica | Altair | Plotly |
+| Feature | Altair | Plotly |
 |---|---|---|
-| Interactividad (hover, zoom, pan) | Limitada | Completa |
-| Customización de tooltips | Declarativa, verbose | Directa con `hovertemplate` |
-| Gráficos 3D y mapas | No | Sí (útil en fases futuras) |
-| Ecosistema | Vega-Altair | Amplio, bien documentado |
+| Interactivity (hover, zoom, pan) | Limited | Full |
+| Tooltip customization | Declarative, verbose | Direct with `hovertemplate` |
+| 3D charts and maps | No | Yes (useful in future phases) |
+| Ecosystem | Vega-Altair | Broad, well documented |
 
-Para un portfolio que muestra patrones de comportamiento, la interactividad de Plotly
-permite al visitante explorar los datos (por ejemplo, hovear una sesión y ver su
-duración exacta), lo cual hace la presentación más convincente.
+For a portfolio showing behavioral patterns, Plotly's interactivity lets
+visitors explore the data (e.g. hover a session and see its exact duration),
+which makes the presentation more convincing.
 
 ---
 
-## Por qué no hay botón de actualizar datos
+## Why there is no refresh button
 
-El dashboard no tiene un botón "Refresh". Los datos se cargan al abrir la página
-y se sirven desde caché hasta que el servidor se reinicia.
+The dashboard has no "Refresh" button. Data is loaded when the page opens
+and served from cache until the server restarts.
 
-**Justificación para este caso:**
-- El pipeline corre cada 6 horas via GitHub Actions. Los datos no cambian en tiempo real.
-- Agregar un botón de refresh requeriría llamar `st.cache_data.clear()`, lo que invalida
-  el caché para todos los usuarios simultáneamente.
-- Para el volumen actual (4 sesiones), la latencia de una query directa es mínima,
-  pero el patrón con caché es correcto para escalar a cientos de sesiones sin
-  saturar el pooler de Supabase con requests redundantes.
+**Justification for this case:**
+- The pipeline runs every 6 hours via GitHub Actions. Data does not change in
+  real time.
+- Adding a refresh button would require calling `st.cache_data.clear()`, which
+  invalidates the cache for every user at once.
+- For the current volume (4 sessions), the latency of a direct query is
+  minimal, but the caching pattern is the right one for scaling to hundreds
+  of sessions without flooding the Supabase pooler with redundant requests.
 
-Cuando el dataset crezca significativamente, se puede agregar un parámetro `ttl`
-al decorador de caché:
+When the dataset grows significantly, a `ttl` parameter can be added to the
+cache decorator:
 ```python
-@st.cache_data(ttl=3600)  # invalida cada hora automaticamente
+@st.cache_data(ttl=3600)  # auto-invalidates every hour
 def _sessions():
     return load_sessions(_engine())
 ```
 
 ---
 
-## Por qué AT TIME ZONE genera `timestamp without time zone` en pandas
+## Why AT TIME ZONE produces `timestamp without time zone` in pandas
 
-Un detalle técnico relevante: cuando PostgreSQL aplica `AT TIME ZONE` a un
-`TIMESTAMPTZ`, el resultado es un `timestamp without time zone` (el offset ya
-fue aplicado, la zona ya no está embebida en el valor).
+A relevant technical detail: when PostgreSQL applies `AT TIME ZONE` to a
+`TIMESTAMPTZ`, the result is a `timestamp without time zone` (the offset has
+already been applied, the zone is no longer embedded in the value).
 
-Pandas lee esto como un datetime naive (sin tzinfo). Por eso en `app.py`:
+Pandas reads this as a naive datetime (no tzinfo). That is why in `app.py`:
 ```python
 pd.to_datetime(df["start_time"]).dt.strftime("%b %d, %Y  %H:%M")
 ```
-No hace falta llamar `.dt.tz_localize()` ni `.dt.tz_convert()` — el valor
-ya está en hora de Bogotá, aunque no tenga el offset explícito.
+There is no need to call `.dt.tz_localize()` or `.dt.tz_convert()` — the value
+is already in Bogotá time, even without an explicit offset.
 
 ---
 
-## Resumen ejecutivo para entrevistas
+## Executive summary for interviews
 
-Cuatro principios aplicados en esta capa:
+Four principles applied in this layer:
 
-1. **Separación UI / datos**
-   `queries.py` contiene todo el SQL. `app.py` solo define el layout.
-   Cambiar el schema no requiere tocar la presentación, y viceversa.
+1. **UI / data separation**
+   `queries.py` holds all SQL. `app.py` only defines the layout.
+   Changing the schema does not require touching the presentation, and vice versa.
 
-2. **Caché por tipo de objeto**
-   `@st.cache_resource` para el pool de conexiones (no serializable),
-   `@st.cache_data` para los DataFrames (serializable, copiado por usuario).
+2. **Cache per object type**
+   `@st.cache_resource` for the connection pool (non-serializable),
+   `@st.cache_data` for DataFrames (serializable, copied per user).
 
-3. **Credenciales agnósticas al ambiente**
-   Un solo `_get_password()` funciona local (dotenv) y en Streamlit Cloud (st.secrets)
-   sin necesidad de dos versiones del archivo de conexión.
+3. **Environment-agnostic credentials**
+   A single `_get_password()` works locally (dotenv) and in Streamlit Cloud
+   (st.secrets) without needing two versions of the connection file.
 
-4. **Timezone en la capa correcta**
-   UTC en la base de datos, conversión al timezone del usuario en la query SQL.
-   El DataFrame que llega a Python ya está en hora local, sin transformaciones adicionales.
+4. **Timezone at the correct layer**
+   UTC in the database, conversion to the user's timezone in the SQL query.
+   The DataFrame that arrives in Python is already in local time, with no
+   further transformations.
 
-> Respuesta corta para entrevista:
-> "Separé queries de UI para que el schema pueda evolucionar sin tocar el layout.
-> Usé cache_resource para el engine (pool de conexiones) y cache_data para los
-> DataFrames, que es la distinción correcta que Streamlit espera. Los secretos se
-> leen de dotenv en local y de st.secrets en producción — un solo código para dos
-> ambientes."
+> Short interview answer:
+> "I separated queries from UI so the schema can evolve without touching the
+> layout. I use cache_resource for the engine (connection pool) and cache_data
+> for DataFrames, which is the distinction Streamlit expects. Secrets come
+> from dotenv locally and st.secrets in production — one codebase for two
+> environments."

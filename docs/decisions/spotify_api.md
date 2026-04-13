@@ -1,31 +1,31 @@
-# Spotify Web API — Hallazgos y decisiones
+# Spotify Web API — Findings and Decisions
 
-> Documentación de lo que aprendimos de la API antes de escribir el código de ingesta.
-> Fuente: https://developer.spotify.com/documentation/web-api
+> Documentation of what we learned about the API before writing the ingestion code.
+> Source: https://developer.spotify.com/documentation/web-api
 
 ---
 
-## Endpoints que usamos y sus límites
+## Endpoints we use and their limits
 
 ### 1. Recently Played Tracks
 ```
 GET https://api.spotify.com/v1/me/player/recently-played
 ```
 
-| Campo | Valor |
+| Field | Value |
 |---|---|
-| Scope requerido | `user-read-recently-played` |
-| Máximo por request | 50 tracks |
-| Paginación | Por cursor (before/after en ms Unix), NO por offset |
-| No soporta | Episodios de podcast |
+| Required scope | `user-read-recently-played` |
+| Max per request | 50 tracks |
+| Pagination | Cursor-based (before/after in Unix ms), NOT offset |
+| Not supported | Podcast episodes |
 
-**Parámetros útiles:**
-- `limit` — cuántos tracks traer (1-50)
-- `before` — timestamp en ms: trae tracks reproducidos ANTES de ese momento
-- `after` — timestamp en ms: trae tracks reproducidos DESPUÉS de ese momento
-- `before` y `after` son mutuamente excluyentes
+**Useful parameters:**
+- `limit` — how many tracks to fetch (1–50)
+- `before` — ms timestamp: fetch tracks played BEFORE that moment
+- `after` — ms timestamp: fetch tracks played AFTER that moment
+- `before` and `after` are mutually exclusive
 
-**Respuesta relevante por item:**
+**Relevant response fields per item:**
 ```json
 {
   "track": {
@@ -41,135 +41,136 @@ GET https://api.spotify.com/v1/me/player/recently-played
 
 ---
 
-### 2. Audio Features (DEPRECADO)
+### 2. Audio Features (DEPRECATED)
 ```
 GET https://api.spotify.com/v1/audio-features?ids={ids}
 ```
 
-| Campo | Valor |
+| Field | Value |
 |---|---|
-| Scope requerido | Ninguno |
-| Máximo IDs por request | 100 |
-| **Estado** | **DEPRECADO** — puede ser eliminado por Spotify |
+| Required scope | None |
+| Max IDs per request | 100 |
+| **Status** | **DEPRECATED** — may be removed by Spotify |
 
-**Campos que retorna:**
-| Campo | Tipo | Descripción |
+**Fields returned:**
+| Field | Type | Description |
 |---|---|---|
-| `tempo` | float | BPM estimado |
-| `energy` | float 0-1 | Intensidad percibida |
-| `danceability` | float 0-1 | Aptitud para bailar |
-| `valence` | float 0-1 | Positividad emocional |
-| `acousticness` | float 0-1 | Presencia acústica |
-| `instrumentalness` | float 0-1 | Ausencia de voz |
-| `loudness` | float (dB) | Volumen promedio |
-| `speechiness` | float 0-1 | Palabras habladas |
-| `liveness` | float 0-1 | Probabilidad de ser en vivo |
-| `key` | int -1 a 11 | Clave musical |
-| `mode` | int 0/1 | 0=menor, 1=mayor |
-| `time_signature` | int 3-7 | Compás |
+| `tempo` | float | Estimated BPM |
+| `energy` | float 0-1 | Perceived intensity |
+| `danceability` | float 0-1 | Suitability for dancing |
+| `valence` | float 0-1 | Emotional positivity |
+| `acousticness` | float 0-1 | Acoustic presence |
+| `instrumentalness` | float 0-1 | Absence of vocals |
+| `loudness` | float (dB) | Average volume |
+| `speechiness` | float 0-1 | Spoken words |
+| `liveness` | float 0-1 | Probability of being live |
+| `key` | int -1 to 11 | Musical key |
+| `mode` | int 0/1 | 0=minor, 1=major |
+| `time_signature` | int 3-7 | Time signature |
 
-**Decisión tomada:** implementar con try/except y marcar los features como NULL
-si el endpoint falla. El pipeline no debe romperse si Spotify elimina este endpoint.
+**Decision taken:** implement with try/except and store features as NULL if the
+endpoint fails. The pipeline must not break if Spotify removes this endpoint.
 
 ---
 
-### 3. Get Several Artists (géneros DEPRECADOS)
+### 3. Get Several Artists (genres DEPRECATED)
 ```
 GET https://api.spotify.com/v1/artists?ids={ids}
 ```
 
-| Campo | Valor |
+| Field | Value |
 |---|---|
-| Scope requerido | Ninguno |
-| Máximo IDs por request | 50 |
+| Required scope | None |
+| Max IDs per request | 50 |
 
-**Campos que retorna:**
-- `id`, `name` — estables
-- `genres` — array de strings. **DEPRECADO**
-- `popularity` — entero 0-100. **DEPRECADO**
-- `followers` — **DEPRECADO**
+**Fields returned:**
+- `id`, `name` — stable
+- `genres` — array of strings. **DEPRECATED**
+- `popularity` — integer 0-100. **DEPRECATED**
+- `followers` — **DEPRECATED**
 
-**Decisión tomada:** guardar géneros como dato opcional. La lógica de `dominant_genre`
-en `session_features` funciona si hay géneros, pero no falla si el array viene vacío.
-En fases futuras se puede reemplazar con clasificación propia por nombre de artista o playlist.
+**Decision taken:** store genres as optional data. The `dominant_genre` logic
+in `session_features` works when genres are present but does not fail when the
+array is empty. Future phases can replace this with a custom classifier based
+on artist name or playlist.
 
 ---
 
-## Autenticación — Authorization Code Flow
+## Authentication — Authorization Code Flow
 
 ```
-Usuario → Tu app → Spotify /authorize → Usuario aprueba → callback con code
-→ Tu app intercambia code por (access_token + refresh_token)
-→ access_token dura 1 hora → refresh_token renueva sin intervención del usuario
+User → Your app → Spotify /authorize → User approves → callback with code
+→ Your app exchanges code for (access_token + refresh_token)
+→ access_token lasts 1 hour → refresh_token renews it without user intervention
 ```
 
-**¿Por qué Authorization Code y no Client Credentials?**
+**Why Authorization Code and not Client Credentials?**
 
-Client Credentials autentica la *app*, no el *usuario*. El endpoint `recently-played`
-requiere saber quién es el usuario. Solo Authorization Code da acceso a endpoints
-de usuario (los que tienen scope `user-read-*`).
+Client Credentials authenticates the *app*, not the *user*. The
+`recently-played` endpoint needs to know who the user is. Only Authorization
+Code grants access to user endpoints (those with `user-read-*` scopes).
 
-**spotipy maneja todo esto automáticamente:**
-- Guarda tokens en `.cache` (ya está en `.gitignore`)
-- Renueva el `access_token` con el `refresh_token` cuando expira
-- La primera vez abre el navegador para que el usuario autorice
+**spotipy handles all of this automatically:**
+- Stores tokens in `.cache` (already in `.gitignore`)
+- Refreshes the `access_token` with the `refresh_token` when it expires
+- The first time it opens the browser so the user can authorize
 
 ---
 
 ## Rate Limits
 
-**Cómo funciona:**
-- Ventana rodante de **30 segundos**
-- En modo desarrollo (apps nuevas): límite más bajo, no publicado
-- Al superarlo: `HTTP 429` con header `Retry-After: N` (segundos a esperar)
+**How it works:**
+- Rolling **30-second** window
+- In development mode (new apps): lower unpublished limit
+- When exceeded: `HTTP 429` with header `Retry-After: N` (seconds to wait)
 
-**Estrategia implementada en el pipeline:**
+**Strategy implemented in the pipeline:**
 ```python
-# Si la API responde 429, esperar exactamente lo que dice Retry-After
-# Si no hay header, usar exponential backoff: 1s, 2s, 4s, 8s...
+# If the API returns 429, wait exactly what Retry-After says
+# If the header is missing, use exponential backoff: 1s, 2s, 4s, 8s...
 ```
 
-**Cómo minimizar llamadas (buenas prácticas de Spotify):**
-1. Usar endpoints batch: `/audio-features?ids=id1,id2,...,id100`
-   en vez de llamar una vez por track
-2. No re-fetchear datos que ya tenemos: si `track_id` ya está en
-   `raw_audio_features`, no volver a pedir sus features
-3. El pipeline de ingesta corre cada 6 horas, no en tiempo real
+**How to minimize calls (Spotify best practices):**
+1. Use batch endpoints: `/audio-features?ids=id1,id2,...,id100`
+   instead of calling once per track
+2. Do not re-fetch data we already have: if `track_id` is already in
+   `raw_audio_features`, do not request its features again
+3. The ingestion pipeline runs every 6 hours, not in real time
 
 ---
 
-## Resumen de límites batch para el pipeline
+## Summary of batch limits for the pipeline
 
-| Lo que pedimos | Endpoint | IDs por call | Estrategia |
+| What we request | Endpoint | IDs per call | Strategy |
 |---|---|---|---|
-| Historial | `/me/player/recently-played` | 50 tracks | Cursor pagination con `before` |
-| Audio features | `/audio-features` | 100 IDs | Agrupar en chunks de 100 |
-| Artistas | `/artists` | 50 IDs | Agrupar en chunks de 50 |
+| History | `/me/player/recently-played` | 50 tracks | Cursor pagination with `before` |
+| Audio features | `/audio-features` | 100 IDs | Group in chunks of 100 |
+| Artists | `/artists` | 50 IDs | Group in chunks of 50 |
 
 ---
 
-## Impacto de las deprecaciones en el diseño
+## Impact of deprecations on the design
 
-Dos deprecaciones afectan nuestro schema:
+Two deprecations affect our schema:
 
-| Deprecación | Afecta | Decisión |
+| Deprecation | Affects | Decision |
 |---|---|---|
-| `/audio-features` endpoint | `raw_audio_features` | Insertar NULL si falla. Pipeline no se rompe. |
-| `genres` y `popularity` en `/artists` | `dominant_genre` en `session_features` | Tratar como opcional. Si viene vacío, `dominant_genre = NULL`. |
+| `/audio-features` endpoint | `raw_audio_features` | Insert NULL on failure. Pipeline does not break. |
+| `genres` and `popularity` in `/artists` | `dominant_genre` in `session_features` | Treat as optional. If empty, `dominant_genre = NULL`. |
 
-**Por qué esto importa para el portfolio:**
-Documentar que sabías de las deprecaciones y diseñaste alrededor de ellas demuestra
-madurez de ingeniería. Un pipeline que se rompe cuando la API cambia es un pipeline
-mal diseñado.
+**Why this matters for the portfolio:**
+Documenting that we were aware of the deprecations and designed around them
+demonstrates engineering maturity. A pipeline that breaks when the API changes
+is a poorly designed pipeline.
 
 ---
 
-## Scope configurado en el proyecto
+## Scope configured in the project
 
 ```python
 # config/settings.py
 SPOTIFY_SCOPE = "user-read-recently-played"
 ```
 
-Es el único scope necesario. No pedimos más permisos de los que necesitamos
-(principio de mínimo privilegio).
+This is the only scope needed. We do not request more permissions than required
+(principle of least privilege).
