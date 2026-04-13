@@ -33,27 +33,37 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, ".")
 
-from db.connection                   import get_connection
-from ingestion.ingest_plays          import run as run_plays
-from ingestion.ingest_audio_features import run as run_audio_features
-from ingestion.ingest_artists        import run as run_artists
-from transformation.build_sessions   import run as run_build_sessions
-from transformation.compute_features import run as run_compute_features
-from transformation.label_activities import run as run_label_activities
+from db.connection import get_connection
 
 
 load_dotenv()
 
 
-# (step_num, display name, callable, target table for row counting)
-STEPS = [
-    (1, "Ingest plays",            run_plays,            "raw_plays"),
-    (2, "Ingest audio features",   run_audio_features,   "raw_audio_features"),
-    (3, "Ingest artists",          run_artists,          "raw_artists"),
-    (4, "Build sessions",          run_build_sessions,   "sessions"),
-    (5, "Compute session features", run_compute_features, "session_features"),
-    (6, "Label activities",        run_label_activities, "activity_labels"),
-]
+def _load_steps() -> list[tuple[int, str, object, str]]:
+    """
+    Import step `run` functions lazily.
+
+    Top-level imports would pull in `spotipy` (transitive via the
+    ingestion modules), which makes the monitoring helpers untestable
+    in environments that only install the test deps. Deferring the
+    imports keeps `_format_markdown_table`, `_emit_warnings`, etc.
+    callable with pytest alone.
+    """
+    from ingestion.ingest_plays          import run as run_plays
+    from ingestion.ingest_audio_features import run as run_audio_features
+    from ingestion.ingest_artists        import run as run_artists
+    from transformation.build_sessions   import run as run_build_sessions
+    from transformation.compute_features import run as run_compute_features
+    from transformation.label_activities import run as run_label_activities
+
+    return [
+        (1, "Ingest plays",            run_plays,            "raw_plays"),
+        (2, "Ingest audio features",   run_audio_features,   "raw_audio_features"),
+        (3, "Ingest artists",          run_artists,          "raw_artists"),
+        (4, "Build sessions",          run_build_sessions,   "sessions"),
+        (5, "Compute session features", run_compute_features, "session_features"),
+        (6, "Label activities",        run_label_activities, "activity_labels"),
+    ]
 
 
 def _count_rows(table: str) -> int | None:
@@ -152,11 +162,13 @@ def run(from_step: int = 1) -> None:
     print("   SPOTIFY LIFE PATTERNS — PIPELINE")
     print("=" * 60)
 
+    steps = _load_steps()
+
     pipeline_start = time.time()
     results: list[dict] = []
     failed = False
 
-    for step_num, step_name, step_fn, target_table in STEPS:
+    for step_num, step_name, step_fn, target_table in steps:
         if step_num < from_step:
             print(f"\n[{step_num}/6] {step_name} — skipped")
             results.append({
@@ -198,7 +210,7 @@ def run(from_step: int = 1) -> None:
 
     # Fill in skipped results for steps that never ran because of a failure
     processed = {r["step"] for r in results}
-    for step_num, step_name, _, _ in STEPS:
+    for step_num, step_name, _, _ in steps:
         if step_num not in processed:
             results.append({
                 "step": step_num, "name": step_name, "status": "skipped",
