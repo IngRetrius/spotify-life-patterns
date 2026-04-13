@@ -94,62 +94,87 @@ available again or is replaced with an alternative source.
    was labeled as "gym"
 3. The rules generate the training dataset for ML in phase 2
 
-### Why 3 activities (not 5)
+### Why 4 activities (not 5)
 
 The original design had 5 rules: shower, gym, motorcycle, work, rest.
 The problem: without audio features, motorcycle and work are
 indistinguishable by duration and hour alone. A 103-minute session at 3am
 was being labeled as "motorcycle" when it was clearly late-night studying.
 
-Decision: reduce to 3 activities with clear, mutually exclusive temporal
-signals:
+Current design: three routines (shower, gym, tasks) plus an explicit
+`aislado` rule for brief, non-routine listening ("user opened Spotify
+and closed it"), plus the `desconocido` fallback when no rule matches:
 
-| Activity | Dominant signal       | Hour differentiator             |
-|----------|-----------------------|---------------------------------|
-| shower   | Very short, 5–20 min  | Morning (6–10h) or night (20–23h) |
-| gym      | Duration 35–110 min   | Day/afternoon (5–10h or 16–22h) |
-| tasks    | Duration > 40 min     | Late night (0–5h or 22–23h)     |
+| Activity | Gate (must hold)     | Differentiators                    |
+|----------|----------------------|------------------------------------|
+| shower   | 5–20 min             | Morning (6–10h) or night (20–23h), 0 skips |
+| gym      | 35–110 min           | Day/afternoon (5–10h or 16–22h), <=2 skips |
+| tasks    | 40–300 min           | Late night (0–5h or 22–23h), <=5 skips     |
+| aislado  | <5 min OR <=2 tracks | Any skip adds evidence             |
 
-The hour bonus is the key discriminator: gym and tasks can last the same
-(60–90 min), but gym does not happen at 3am.
+### Duration-gated scoring
 
-### Confidence score system
+Each routine rule has a duration band that acts as a **gate**: sessions
+outside the band score 0, regardless of hour or skip signals. This is
+what makes the scoring robust. Without the gate, a 2.6-min session at
+23h with 0 skips would collect the hour bonus (+0.2) and zero-skip
+bonus (+0.3) and cross the 0.4 confidence threshold as a "shower" —
+even though a 2.6-min session is clearly not a shower.
 
-Each rule adds points per condition satisfied (max total = 1.0).
-The rule with the highest score wins. If none exceeds 0.4 → "unknown".
+With the gate, the primary signal (duration) must match for any
+secondary signal to matter. Short sessions that fall through every
+routine are then caught by `aislado`.
 
 ```python
-SHOWER_HOURS      = set(range(6, 11))  | set(range(20, 24))   # 6-10h and 20-23h
-GYM_HOURS         = set(range(5, 11))  | set(range(16, 23))   # 5-10h and 16-22h
-NIGHT_STUDY_HOURS = set(range(22, 24)) | set(range(0, 6))     # 22-23h and 0-5h
+SHOWER_HOURS      = set(range(6, 11))  | set(range(20, 24))
+GYM_HOURS         = set(range(5, 11))  | set(range(16, 23))
+NIGHT_STUDY_HOURS = set(range(22, 24)) | set(range(0, 6))
 
-def rule_shower(row):   # max 0.5 + 0.3 + 0.2 = 1.0
-    if 5 <= duration <= 20:        score += 0.5  # primary condition
-    if n_skips == 0:               score += 0.3  # cannot touch the phone
-    if hour in SHOWER_HOURS:       score += 0.2  # typical grooming hours
+SHOWER_DURATION = (5, 20)
+GYM_DURATION    = (35, 110)
+TASKS_DURATION  = (40, 300)           # upper cap filters overnight drift
+AISLADO_MAX_MINUTES = 5
+AISLADO_MAX_TRACKS  = 2
 
-def rule_gym(row):      # max 0.4 + 0.3 + 0.3 = 1.0
-    if 35 <= duration <= 110:      score += 0.4  # typical workout duration
-    if n_skips <= 2:               score += 0.3  # continuous music
-    if hour in GYM_HOURS:          score += 0.3  # 5-10am or 4-10pm
+def rule_ducha(row):              # max 0.5 + 0.3 + 0.2 = 1.0
+    if not (5 <= duration <= 20):     return 0.0       # gate
+    score = 0.5
+    if n_skips == 0:                  score += 0.3
+    if hour in SHOWER_HOURS:          score += 0.2
 
-def rule_tasks(row):    # max 0.5 + 0.2 + 0.3 = 1.0
-    if duration > 40:              score += 0.5  # long session
-    if n_skips <= 5:               score += 0.2  # background music
-    if hour in NIGHT_STUDY_HOURS:  score += 0.3  # late night = studying
+def rule_gimnasio(row):           # max 0.4 + 0.3 + 0.3 = 1.0
+    if not (35 <= duration <= 110):   return 0.0       # gate
+    score = 0.4
+    if n_skips <= 2:                  score += 0.3
+    if hour in GYM_HOURS:             score += 0.3
+
+def rule_tareas(row):             # max 0.5 + 0.2 + 0.3 = 1.0
+    if not (40 <= duration <= 300):   return 0.0       # gate
+    score = 0.5
+    if n_skips <= 5:                  score += 0.2
+    if hour in NIGHT_STUDY_HOURS:     score += 0.3
+
+def rule_aislado(row):            # max 0.5 + 0.2 = 0.7
+    if not (duration < 5 or n_tracks <= 2):  return 0.0
+    score = 0.5
+    if n_skips >= 1:                  score += 0.2
 ```
 
-Results for the current 4 sessions:
+Results for the four canonical sessions:
 
-| Session      | Dur    | Hour | Skips | Label   | Score |
-|--------------|--------|------|-------|---------|-------|
-| 38e0b333...  | 103.5m | 3h   | 0     | tasks   | 1.00  |
-| 74ca3bf1...  | 14.5m  | 17h  | 0     | shower  | 0.80  |
-| 44158cee...  | 62.3m  | 20h  | 2     | gym     | 1.00  |
-| 83e34a9d...  | 2.6m   | 23h  | 0     | shower  | 0.50  |
+| Session      | Dur    | Hour | Skips | Label    | Score |
+|--------------|--------|------|-------|----------|-------|
+| 38e0b333...  | 103.5m | 3h   | 0     | tareas   | 1.00  |
+| 74ca3bf1...  | 14.5m  | 17h  | 0     | ducha    | 0.80  |
+| 44158cee...  | 62.3m  | 20h  | 2     | gimnasio | 1.00  |
+| 83e34a9d...  | 2.6m   | 23h  | 0     | aislado  | 0.50  |
 
-The score is not a statistical probability — it is a measure of how many
-conditions are satisfied. With more data it can be replaced with a classifier
+The score is not a statistical probability — it measures how many
+secondary signals align, given the primary gate opened. The aislado
+cap at 0.7 is deliberate: it ensures a legitimate shower or gym
+session (up to 1.0) outranks casual listening when both gates open.
+
+With more data, rule-based scoring will be replaced by a classifier
 that produces real probabilities.
 
 ---

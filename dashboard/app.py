@@ -90,6 +90,7 @@ ACTIVITY_COLORS = {
     "ducha":         "#4C9BE8",
     "gimnasio":      "#E8754C",
     "tareas":        "#4CAF82",
+    "aislado":       "#C4A77D",
     "desconocido":   "#9E9E9E",
     "sin etiquetar": "#BDBDBD",
 }

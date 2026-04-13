@@ -126,19 +126,22 @@ spotify-life-patterns/
 
 ## Activity Labeling
 
-Sessions are classified into three activities using heuristic rules.
-Each rule scores 0 to 1 based on conditions met; the highest score wins.
-Sessions below 0.4 confidence are labeled `unknown`.
+Sessions are classified with duration-gated heuristic rules. Each rule has a
+**gate** on duration (the primary signal) — sessions outside the band score 0
+regardless of secondary signals. The rule with the highest score wins; sessions
+below 0.4 confidence fall back to `desconocido`.
 
-| Activity | Primary signal | Hour bonus |
+| Activity | Duration gate | Secondary signals |
 |---|---|---|
-| Shower (ducha) | Duration 5–20 min, zero skips | 6–10 AM or 8–11 PM |
-| Gym (gimnasio) | Duration 35–110 min, <= 2 skips | 5–10 AM or 4–10 PM |
-| Study/Work (tareas) | Duration > 40 min, <= 5 skips | 10 PM – 5 AM |
+| Shower (`ducha`) | 5–20 min | 0 skips, hours 6–10 AM or 8–11 PM |
+| Gym (`gimnasio`) | 35–110 min | <= 2 skips, hours 5–10 AM or 4–10 PM |
+| Study/Work (`tareas`) | 40–300 min | <= 5 skips, hours 10 PM – 5 AM |
+| Casual (`aislado`) | <5 min OR <=2 tracks | any skip adds evidence |
 
-The hour bonus is the key discriminator between gym and study sessions, which can overlap
-significantly in duration. Audio features (BPM, energy) are reserved for a future ML phase
-when enough labeled sessions exist to train a classifier.
+The duration gate is what prevents mis-labeling: a 2-minute session at 11 PM
+with zero skips is *not* a shower — it's brief casual listening that the
+`aislado` rule catches. Audio features (BPM, energy) are reserved for a future
+ML phase when enough labeled sessions exist to train a classifier.
 
 For more detail: [`docs/decisions/transformation_layer.md`](docs/decisions/transformation_layer.md)
 

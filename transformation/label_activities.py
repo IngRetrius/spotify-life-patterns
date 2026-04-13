@@ -1,21 +1,32 @@
 """
-Etiquetado heuristico de actividades por sesion.
+Heuristic activity labeling per session.
 
-Actividades detectadas: ducha, gimnasio, tareas
-(+ 'desconocido' cuando ninguna regla supera el umbral minimo)
+Labels produced: aislado, ducha, gimnasio, tareas
+                 (+ 'desconocido' when no rule clears the confidence threshold)
 
-Cada regla retorna un score entre 0 y 1.
-Se elige la regla con mayor score.
-Si ninguna supera MIN_CONFIDENCE -> 'desconocido'.
+Each rule returns a score in [0, 1]. The rule with the highest score wins.
+If none crosses MIN_CONFIDENCE -> 'desconocido'.
 
-Senales disponibles (sin audio features por restriccion API):
-- duration_minutes : duracion total de la sesion
-- n_tracks         : cantidad de canciones
-- n_skips          : canciones escuchadas menos del 50%
-- hour_of_day      : hora de inicio (0-23)
-- day_of_week      : dia (0=lunes, 6=domingo)
+Signals available (no audio features due to Spotify API restriction):
+- duration_minutes : total session duration
+- n_tracks         : number of tracks
+- n_skips          : tracks listened to less than 50%
+- hour_of_day      : start hour (0-23)
+- day_of_week      : 0=Monday, 6=Sunday
 
-Uso:
+Scoring model: duration-gated
+-----------------------------
+Each routine rule (ducha, gimnasio, tareas) has a duration band that
+acts as a gate. Sessions outside the band score 0 on that rule, no
+matter how the other signals look. This prevents the failure mode where
+time-of-day + zero-skips bonuses push a short, unrelated session over
+the threshold of a routine it clearly does not match.
+
+Sessions that fail every routine gate but are very short or have very
+few tracks are captured by `aislado` ("casual listening") — opened
+Spotify briefly, no routine inferred.
+
+Usage:
     python transformation/label_activities.py
 """
 
@@ -28,17 +39,31 @@ import os
 
 load_dotenv()
 
-# ── Horarios por actividad ────────────────────────────────────────────────────
-# Definidos como conjuntos para hacer la busqueda O(1)
+# ── Hour windows per activity ─────────────────────────────────────────────────
+# Defined as sets for O(1) lookup.
 
-SHOWER_HOURS     = set(range(6, 11))  | set(range(20, 24))  # 6-10h y 20-23h
-GYM_HOURS        = set(range(5, 11))  | set(range(16, 23))  # 5-10h y 16-22h
-NIGHT_STUDY_HOURS = set(range(22, 24)) | set(range(0, 6))   # 22-23h y 0-5h (madrugada)
+SHOWER_HOURS      = set(range(6, 11))  | set(range(20, 24))   # 6-10h and 20-23h
+GYM_HOURS         = set(range(5, 11))  | set(range(16, 23))   # 5-10h and 16-22h
+NIGHT_STUDY_HOURS = set(range(22, 24)) | set(range(0, 6))     # 22-23h and 0-5h
+
+# ── Duration gates ────────────────────────────────────────────────────────────
+# Sessions outside these bands cannot score for the rule, regardless
+# of hour or skip signals. This is what makes the scoring robust:
+# the primary signal (duration) must match for any secondary signal
+# to matter.
+
+SHOWER_DURATION = (5, 20)        # minutes
+GYM_DURATION    = (35, 110)
+TASKS_DURATION  = (40, 300)      # 5h upper cap filters overnight drift
+
+# Casual listening: very short OR very few tracks.
+AISLADO_MAX_MINUTES = 5
+AISLADO_MAX_TRACKS  = 2
 
 MIN_CONFIDENCE = 0.4
 
 
-# ── Conexion ──────────────────────────────────────────────────────────────────
+# ── Connection ────────────────────────────────────────────────────────────────
 
 def get_db_connection():
     return psycopg2.connect(
@@ -51,10 +76,10 @@ def get_db_connection():
     )
 
 
-# ── Carga de datos ────────────────────────────────────────────────────────────
+# ── Data loading ──────────────────────────────────────────────────────────────
 
 def load_sessions_with_features(conn) -> pd.DataFrame:
-    """Une sessions con session_features en un solo DataFrame."""
+    """Join sessions with session_features into a single DataFrame."""
     query = """
         SELECT
             s.session_id,
@@ -71,79 +96,98 @@ def load_sessions_with_features(conn) -> pd.DataFrame:
     return df
 
 
-# ── Reglas heuristicas ────────────────────────────────────────────────────────
+# ── Heuristic rules ───────────────────────────────────────────────────────────
 
 def rule_ducha(row: pd.Series) -> float:
     """
-    Ducha: sesion corta, sin skips, en horario de aseo.
+    Shower: short session in grooming hours, no skips (hands-free).
 
-    La condicion dominante es la duracion corta (5-20 min).
-    El usuario no puede interactuar con el telefono -> 0 skips.
-    Bonus si el horario es tipico de ducha (manana o noche).
-
-    Max score: 0.5 + 0.3 + 0.2 = 1.0
+    Gate: duration must fall in the shower band.
+    Base: 0.5 once gated. Bonuses total up to +0.5.
+    Max score: 1.0
     """
-    score = 0.0
-    if 5 <= row["duration_minutes"] <= 20:
-        score += 0.5   # condicion principal — corta y acotada
-    if row["n_skips"] == 0:
-        score += 0.3   # no puede tocar el telefono en la ducha
-    if row["hour_of_day"] in SHOWER_HOURS:
-        score += 0.2   # horario tipico de aseo
+    lo, hi = SHOWER_DURATION
+    if not (lo <= row["duration_minutes"] <= hi):
+        return 0.0                                      # gate
+
+    score = 0.5
+    if row["n_skips"] == 0:                  score += 0.3   # can't touch the phone
+    if row["hour_of_day"] in SHOWER_HOURS:   score += 0.2   # grooming hours
     return score
 
 
 def rule_gimnasio(row: pd.Series) -> float:
     """
-    Gimnasio: duracion de entrenamiento + musica continua + horario de gym.
+    Gym: training-duration session with continuous music, at gym hours.
 
-    Las tres condiciones juntas distinguen el gym del estudio nocturno:
-    el gym rara vez ocurre a las 3am y suele tener pocos skips.
-
-    Max score: 0.4 + 0.3 + 0.3 = 1.0
+    Gate: duration must fall in the workout band (35-110 min).
+    Max score: 1.0
     """
-    score = 0.0
-    if 35 <= row["duration_minutes"] <= 110:
-        score += 0.4   # duracion tipica de entrenamiento
-    if row["n_skips"] <= 2:
-        score += 0.3   # musica continua, no interrumpe el ejercicio
-    if row["hour_of_day"] in GYM_HOURS:
-        score += 0.3   # 5-10am o 4-10pm — horario real de gym
+    lo, hi = GYM_DURATION
+    if not (lo <= row["duration_minutes"] <= hi):
+        return 0.0                                      # gate
+
+    score = 0.4
+    if row["n_skips"] <= 2:                  score += 0.3   # continuous music
+    if row["hour_of_day"] in GYM_HOURS:      score += 0.3   # 5-10am or 4-10pm
     return score
 
 
 def rule_tareas(row: pd.Series) -> float:
     """
-    Tareas/Trabajo: sesion larga con musica de fondo.
+    Tasks / focused work: long session with background music.
 
-    La duracion larga es la senal principal.
-    El bonus de madrugada (0-5am) diferencia el estudio nocturno
-    del gimnasio: ambos pueden durar 60-100 min, pero el gym
-    no ocurre a las 3am.
-
-    Max score: 0.5 + 0.2 + 0.3 = 1.0
+    Gate: duration in (40, 300) min — longer than 5h is almost certainly
+    accidental playback, not real focused listening.
+    Max score: 1.0
     """
-    score = 0.0
-    if row["duration_minutes"] > 40:
-        score += 0.5   # sesiones largas = concentracion sostenida
-    if row["n_skips"] <= 5:
-        score += 0.2   # musica de fondo: pocos skips pero mas que gym
-    if row["hour_of_day"] in NIGHT_STUDY_HOURS:
-        score += 0.3   # madrugada = estudio/trabajo nocturno
+    lo, hi = TASKS_DURATION
+    if not (lo <= row["duration_minutes"] <= hi):
+        return 0.0                                      # gate
+
+    score = 0.5
+    if row["n_skips"] <= 5:                      score += 0.2   # background music
+    if row["hour_of_day"] in NIGHT_STUDY_HOURS:  score += 0.3   # late-night focus
     return score
 
 
+def rule_aislado(row: pd.Series) -> float:
+    """
+    Isolated / casual listening: user opened Spotify briefly and moved on.
+
+    Not a routine. Captures the sessions that would otherwise be
+    mislabeled by weak secondary signals alone (e.g. 2.6-min session at
+    23h with 0 skips — previously mislabeled as 'ducha' because the hour
+    bonus + zero-skips bonus alone crossed 0.4).
+
+    Gate: very short (< 5 min) OR very few tracks (<= 2).
+    Max score: 0.7 — intentionally lower than the routine rules so a
+    legitimate shower or gym session still wins when both gates open.
+    """
+    if not (row["duration_minutes"] < AISLADO_MAX_MINUTES
+            or row["n_tracks"] <= AISLADO_MAX_TRACKS):
+        return 0.0                                      # gate
+
+    score = 0.5
+    if row["n_skips"] >= 1:                  score += 0.2   # exploratory behavior
+    return score
+
+
+# Order matters for tie-breaking: max() returns the first key with the
+# max value when iterating a dict. Routine rules come first so a true
+# shower / gym / tasks session wins a 0.5 tie against aislado.
 RULES = {
     "ducha":    rule_ducha,
     "gimnasio": rule_gimnasio,
     "tareas":   rule_tareas,
+    "aislado":  rule_aislado,
 }
 
 
 def classify_session(row: pd.Series) -> tuple[str, float]:
     """
-    Aplica las 3 reglas y retorna la etiqueta con mayor score.
-    Si ninguna supera MIN_CONFIDENCE -> 'desconocido'.
+    Apply all rules and return the (label, confidence) with the max score.
+    If none crosses MIN_CONFIDENCE -> 'desconocido'.
     """
     scores = {label: fn(row) for label, fn in RULES.items()}
     best_label = max(scores, key=scores.get)
@@ -155,7 +199,7 @@ def classify_session(row: pd.Series) -> tuple[str, float]:
     return best_label, best_score
 
 
-# ── Escritura en base de datos ────────────────────────────────────────────────
+# ── Database write ────────────────────────────────────────────────────────────
 
 UPSERT_LABELS_SQL = """
     INSERT INTO activity_labels (session_id, activity_label, confidence_score, labeling_method)
@@ -172,10 +216,10 @@ def upsert_labels(cursor, labels: list[dict]) -> None:
     psycopg2.extras.execute_batch(cursor, UPSERT_LABELS_SQL, labels, page_size=100)
 
 
-# ── Orquestacion ──────────────────────────────────────────────────────────────
+# ── Orchestration ─────────────────────────────────────────────────────────────
 
 def run() -> None:
-    print("=== Etiquetado de actividades ===")
+    print("=== Activity labeling ===")
 
     conn = get_db_connection()
     conn.autocommit = False
@@ -185,7 +229,7 @@ def run() -> None:
         df = load_sessions_with_features(conn)
 
         if df.empty:
-            print("No hay sesiones. Corre build_sessions.py primero.")
+            print("No sessions found. Run build_sessions.py first.")
             return
 
         labels = []
@@ -201,8 +245,8 @@ def run() -> None:
         upsert_labels(cursor, labels)
         conn.commit()
 
-        print(f"{len(labels)} sesiones etiquetadas:\n")
-        print(f"  {'Sesion':<10} {'Dur':>8} {'Hora':>5} {'Skips':>6}  {'Actividad':<12} {'Score':>6}")
+        print(f"{len(labels)} sessions labeled:\n")
+        print(f"  {'Session':<10} {'Dur':>8} {'Hour':>5} {'Skips':>6}  {'Activity':<12} {'Score':>6}")
         print(f"  {'-'*55}")
         for i, (_, row) in enumerate(df.iterrows()):
             lbl = labels[i]
@@ -215,7 +259,7 @@ def run() -> None:
                 f"{lbl['confidence_score']:>5.2f}"
             )
 
-        print(f"\nResumen: {len(labels)} etiquetas escritas en activity_labels.")
+        print(f"\nSummary: {len(labels)} labels written to activity_labels.")
 
     except Exception as e:
         conn.rollback()
