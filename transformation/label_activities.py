@@ -1,11 +1,11 @@
 """
 Heuristic activity labeling per session.
 
-Labels produced: aislado, ducha, gimnasio, tareas
-                 (+ 'desconocido' when no rule clears the confidence threshold)
+Labels produced: casual, shower, gym, tasks
+                 (+ 'unknown' when no rule clears the confidence threshold)
 
 Each rule returns a score in [0, 1]. The rule with the highest score wins.
-If none crosses MIN_CONFIDENCE -> 'desconocido'.
+If none crosses MIN_CONFIDENCE -> 'unknown'.
 
 Signals available (no audio features due to Spotify API restriction):
 - duration_minutes : total session duration
@@ -16,15 +16,15 @@ Signals available (no audio features due to Spotify API restriction):
 
 Scoring model: duration-gated
 -----------------------------
-Each routine rule (ducha, gimnasio, tareas) has a duration band that
-acts as a gate. Sessions outside the band score 0 on that rule, no
-matter how the other signals look. This prevents the failure mode where
+Each routine rule (shower, gym, tasks) has a duration band that acts
+as a gate. Sessions outside the band score 0 on that rule, no matter
+how the other signals look. This prevents the failure mode where
 time-of-day + zero-skips bonuses push a short, unrelated session over
 the threshold of a routine it clearly does not match.
 
 Sessions that fail every routine gate but are very short or have very
-few tracks are captured by `aislado` ("casual listening") — opened
-Spotify briefly, no routine inferred.
+few tracks are captured by `casual` — opened Spotify briefly, no
+routine inferred.
 
 Usage:
     python transformation/label_activities.py
@@ -61,8 +61,8 @@ GYM_DURATION    = (35, 110)
 TASKS_DURATION  = (40, 300)      # 5h upper cap filters overnight drift
 
 # Casual listening: very short OR very few tracks.
-AISLADO_MAX_MINUTES = 5
-AISLADO_MAX_TRACKS  = 2
+CASUAL_MAX_MINUTES = 5
+CASUAL_MAX_TRACKS  = 2
 
 MIN_CONFIDENCE = 0.4
 
@@ -89,7 +89,7 @@ def load_sessions_with_features(conn) -> pd.DataFrame:
 
 # ── Heuristic rules ───────────────────────────────────────────────────────────
 
-def rule_ducha(row: pd.Series) -> float:
+def rule_shower(row: pd.Series) -> float:
     """
     Shower: short session in grooming hours, no skips (hands-free).
 
@@ -107,7 +107,7 @@ def rule_ducha(row: pd.Series) -> float:
     return score
 
 
-def rule_gimnasio(row: pd.Series) -> float:
+def rule_gym(row: pd.Series) -> float:
     """
     Gym: training-duration session with continuous music, at gym hours.
 
@@ -124,7 +124,7 @@ def rule_gimnasio(row: pd.Series) -> float:
     return score
 
 
-def rule_tareas(row: pd.Series) -> float:
+def rule_tasks(row: pd.Series) -> float:
     """
     Tasks / focused work: long session with background music.
 
@@ -142,21 +142,21 @@ def rule_tareas(row: pd.Series) -> float:
     return score
 
 
-def rule_aislado(row: pd.Series) -> float:
+def rule_casual(row: pd.Series) -> float:
     """
-    Isolated / casual listening: user opened Spotify briefly and moved on.
+    Casual listening: user opened Spotify briefly and moved on.
 
     Not a routine. Captures the sessions that would otherwise be
     mislabeled by weak secondary signals alone (e.g. 2.6-min session at
-    23h with 0 skips — previously mislabeled as 'ducha' because the hour
+    23h with 0 skips — previously mislabeled as 'shower' because the hour
     bonus + zero-skips bonus alone crossed 0.4).
 
     Gate: very short (< 5 min) OR very few tracks (<= 2).
     Max score: 0.7 — intentionally lower than the routine rules so a
     legitimate shower or gym session still wins when both gates open.
     """
-    if not (row["duration_minutes"] < AISLADO_MAX_MINUTES
-            or row["n_tracks"] <= AISLADO_MAX_TRACKS):
+    if not (row["duration_minutes"] < CASUAL_MAX_MINUTES
+            or row["n_tracks"] <= CASUAL_MAX_TRACKS):
         return 0.0                                      # gate
 
     score = 0.5
@@ -166,26 +166,26 @@ def rule_aislado(row: pd.Series) -> float:
 
 # Order matters for tie-breaking: max() returns the first key with the
 # max value when iterating a dict. Routine rules come first so a true
-# shower / gym / tasks session wins a 0.5 tie against aislado.
+# shower / gym / tasks session wins a 0.5 tie against casual.
 RULES = {
-    "ducha":    rule_ducha,
-    "gimnasio": rule_gimnasio,
-    "tareas":   rule_tareas,
-    "aislado":  rule_aislado,
+    "shower": rule_shower,
+    "gym":    rule_gym,
+    "tasks":  rule_tasks,
+    "casual": rule_casual,
 }
 
 
 def classify_session(row: pd.Series) -> tuple[str, float]:
     """
     Apply all rules and return the (label, confidence) with the max score.
-    If none crosses MIN_CONFIDENCE -> 'desconocido'.
+    If none crosses MIN_CONFIDENCE -> 'unknown'.
     """
     scores = {label: fn(row) for label, fn in RULES.items()}
     best_label = max(scores, key=scores.get)
     best_score = round(scores[best_label], 2)
 
     if best_score < MIN_CONFIDENCE:
-        return "desconocido", best_score
+        return "unknown", best_score
 
     return best_label, best_score
 

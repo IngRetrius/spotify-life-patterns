@@ -87,12 +87,12 @@ st.markdown("""
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 ACTIVITY_COLORS = {
-    "ducha":         "#4C9BE8",
-    "gimnasio":      "#E8754C",
-    "tareas":        "#4CAF82",
-    "aislado":       "#C4A77D",
-    "desconocido":   "#9E9E9E",
-    "sin etiquetar": "#BDBDBD",
+    "shower":    "#4C9BE8",
+    "gym":       "#E8754C",
+    "tasks":     "#4CAF82",
+    "casual":    "#C4A77D",
+    "unknown":   "#9E9E9E",
+    "unlabeled": "#BDBDBD",
 }
 
 DAY_LABELS = {
@@ -323,7 +323,7 @@ with col_tracks:
 st.divider()
 st.caption(
     "Data pipeline: Spotify API -> Supabase (PostgreSQL) -> Streamlit  |  "
-    "Activities labeled with heuristic rules (ducha, gimnasio, tareas)"
+    "Activities labeled with heuristic rules (shower, gym, tasks, casual)"
 )
 st.caption(
     "Note: audio features (BPM, energy, valence) and dominant genre are "

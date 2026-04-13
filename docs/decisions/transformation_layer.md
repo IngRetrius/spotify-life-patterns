@@ -102,15 +102,15 @@ indistinguishable by duration and hour alone. A 103-minute session at 3am
 was being labeled as "motorcycle" when it was clearly late-night studying.
 
 Current design: three routines (shower, gym, tasks) plus an explicit
-`aislado` rule for brief, non-routine listening ("user opened Spotify
-and closed it"), plus the `desconocido` fallback when no rule matches:
+`casual` rule for brief, non-routine listening ("user opened Spotify
+and closed it"), plus the `unknown` fallback when no rule matches:
 
 | Activity | Gate (must hold)     | Differentiators                    |
 |----------|----------------------|------------------------------------|
 | shower   | 5–20 min             | Morning (6–10h) or night (20–23h), 0 skips |
 | gym      | 35–110 min           | Day/afternoon (5–10h or 16–22h), <=2 skips |
 | tasks    | 40–300 min           | Late night (0–5h or 22–23h), <=5 skips     |
-| aislado  | <5 min OR <=2 tracks | Any skip adds evidence             |
+| casual   | <5 min OR <=2 tracks | Any skip adds evidence             |
 
 ### Duration-gated scoring
 
@@ -123,7 +123,7 @@ even though a 2.6-min session is clearly not a shower.
 
 With the gate, the primary signal (duration) must match for any
 secondary signal to matter. Short sessions that fall through every
-routine are then caught by `aislado`.
+routine are then caught by `casual`.
 
 ```python
 SHOWER_HOURS      = set(range(6, 11))  | set(range(20, 24))
@@ -133,28 +133,28 @@ NIGHT_STUDY_HOURS = set(range(22, 24)) | set(range(0, 6))
 SHOWER_DURATION = (5, 20)
 GYM_DURATION    = (35, 110)
 TASKS_DURATION  = (40, 300)           # upper cap filters overnight drift
-AISLADO_MAX_MINUTES = 5
-AISLADO_MAX_TRACKS  = 2
+CASUAL_MAX_MINUTES = 5
+CASUAL_MAX_TRACKS  = 2
 
-def rule_ducha(row):              # max 0.5 + 0.3 + 0.2 = 1.0
+def rule_shower(row):             # max 0.5 + 0.3 + 0.2 = 1.0
     if not (5 <= duration <= 20):     return 0.0       # gate
     score = 0.5
     if n_skips == 0:                  score += 0.3
     if hour in SHOWER_HOURS:          score += 0.2
 
-def rule_gimnasio(row):           # max 0.4 + 0.3 + 0.3 = 1.0
+def rule_gym(row):                # max 0.4 + 0.3 + 0.3 = 1.0
     if not (35 <= duration <= 110):   return 0.0       # gate
     score = 0.4
     if n_skips <= 2:                  score += 0.3
     if hour in GYM_HOURS:             score += 0.3
 
-def rule_tareas(row):             # max 0.5 + 0.2 + 0.3 = 1.0
+def rule_tasks(row):              # max 0.5 + 0.2 + 0.3 = 1.0
     if not (40 <= duration <= 300):   return 0.0       # gate
     score = 0.5
     if n_skips <= 5:                  score += 0.2
     if hour in NIGHT_STUDY_HOURS:     score += 0.3
 
-def rule_aislado(row):            # max 0.5 + 0.2 = 0.7
+def rule_casual(row):             # max 0.5 + 0.2 = 0.7
     if not (duration < 5 or n_tracks <= 2):  return 0.0
     score = 0.5
     if n_skips >= 1:                  score += 0.2
@@ -162,15 +162,15 @@ def rule_aislado(row):            # max 0.5 + 0.2 = 0.7
 
 Results for the four canonical sessions:
 
-| Session      | Dur    | Hour | Skips | Label    | Score |
-|--------------|--------|------|-------|----------|-------|
-| 38e0b333...  | 103.5m | 3h   | 0     | tareas   | 1.00  |
-| 74ca3bf1...  | 14.5m  | 17h  | 0     | ducha    | 0.80  |
-| 44158cee...  | 62.3m  | 20h  | 2     | gimnasio | 1.00  |
-| 83e34a9d...  | 2.6m   | 23h  | 0     | aislado  | 0.50  |
+| Session      | Dur    | Hour | Skips | Label  | Score |
+|--------------|--------|------|-------|--------|-------|
+| 38e0b333...  | 103.5m | 3h   | 0     | tasks  | 1.00  |
+| 74ca3bf1...  | 14.5m  | 17h  | 0     | shower | 0.80  |
+| 44158cee...  | 62.3m  | 20h  | 2     | gym    | 1.00  |
+| 83e34a9d...  | 2.6m   | 23h  | 0     | casual | 0.50  |
 
 The score is not a statistical probability — it measures how many
-secondary signals align, given the primary gate opened. The aislado
+secondary signals align, given the primary gate opened. The casual
 cap at 0.7 is deliberate: it ensures a legitimate shower or gym
 session (up to 1.0) outranks casual listening when both gates open.
 

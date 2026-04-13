@@ -50,7 +50,7 @@ def load_kpis(engine) -> dict:
         activity_row = conn.execute(text(
             "SELECT activity_label, COUNT(*) AS cnt "
             "FROM activity_labels "
-            "WHERE activity_label != 'desconocido' "
+            "WHERE activity_label != 'unknown' "
             "GROUP BY activity_label "
             "ORDER BY cnt DESC LIMIT 1"
         )).fetchone()
@@ -90,7 +90,7 @@ def load_sessions(engine) -> pd.DataFrame:
     """
     df = pd.read_sql(query, engine)
     df["n_skips"] = df["n_skips"].fillna(0).astype(int)
-    df["activity_label"] = df["activity_label"].fillna("sin etiquetar")
+    df["activity_label"] = df["activity_label"].fillna("unlabeled")
     return df
 
 
