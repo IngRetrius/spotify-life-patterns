@@ -325,3 +325,8 @@ st.caption(
     "Data pipeline: Spotify API -> Supabase (PostgreSQL) -> Streamlit  |  "
     "Activities labeled with heuristic rules (ducha, gimnasio, tareas)"
 )
+st.caption(
+    "Note: audio features (BPM, energy, valence) and dominant genre are "
+    "stored as NULL — Spotify restricted /audio-features and /artists "
+    "for new developer apps in 2024. Labeling relies on temporal signals only."
+)
