@@ -23,12 +23,17 @@ jobs:
       - name: Install dependencies
         run: pip install spotipy psycopg2-binary python-dotenv pandas sqlalchemy
 
-      # Reconstruye el .cache de Spotify desde el secret
+      # Rebuilds the Spotify .cache from the repo secret
       - name: Restore Spotify token cache
         run: echo '${{ secrets.SPOTIFY_CACHE }}' > .cache
 
-      # ── Pipeline completo ─────────────────────────────────────────────────
-      # Corre los 6 pasos: ingesta (3) + transformacion (3)
+      # ── Full pipeline ────────────────────────────────────────────────
+      # Runs the 6 steps: ingestion (3) + transformation (3).
+      # run_pipeline.py queries Supabase for row counts before and after
+      # each step and appends a markdown table to $GITHUB_STEP_SUMMARY,
+      # so the results are visible on the Actions run page without
+      # opening the logs. It also emits a ::warning:: annotation if
+      # step 1 ingested 0 new plays.
       - name: Run full pipeline
         env:
           SPOTIFY_CLIENT_ID:     ${{ secrets.SPOTIFY_CLIENT_ID }}
@@ -37,6 +42,9 @@ jobs:
           SUPABASE_DB_PASSWORD:  ${{ secrets.SUPABASE_DB_PASSWORD }}
         run: python scripts/run_pipeline.py
 
-      - name: Summary
+      # Fallback note — only fires if the pipeline step was skipped
+      # (e.g. cancellation before it could run). The pipeline itself
+      # handles the success/failure summary via GITHUB_STEP_SUMMARY.
+      - name: Workflow completion timestamp
         if: always()
-        run: echo "Pipeline completado en $(date -u '+%Y-%m-%d %H:%M UTC')"
+        run: echo "Workflow finished at $(date -u '+%Y-%m-%d %H:%M UTC')"
