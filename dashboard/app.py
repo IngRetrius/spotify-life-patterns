@@ -19,6 +19,7 @@ import plotly.graph_objects as go
 import pandas as pd
 import sys
 import os
+from datetime import timedelta
 
 # Allow running from project root: streamlit run dashboard/app.py
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -121,42 +122,42 @@ def _engine():
     return get_engine()
 
 
-@st.cache_data
+@st.cache_data(ttl=timedelta(hours=3))
 def _kpis():
     return load_kpis(_engine())
 
 
-@st.cache_data
+@st.cache_data(ttl=timedelta(hours=3))
 def _sessions():
     return load_sessions(_engine())
 
 
-@st.cache_data
+@st.cache_data(ttl=timedelta(hours=3))
 def _top_tracks():
     return load_top_tracks(_engine())
 
 
-@st.cache_data
+@st.cache_data(ttl=timedelta(hours=3))
 def _plays_by_hour():
     return load_plays_by_hour(_engine())
 
 
-@st.cache_data
+@st.cache_data(ttl=timedelta(hours=3))
 def _activity_counts():
     return load_activity_counts(_engine())
 
 
-@st.cache_data
+@st.cache_data(ttl=timedelta(hours=3))
 def _available_dates():
     return load_available_dates(_engine())
 
 
-@st.cache_data
+@st.cache_data(ttl=timedelta(hours=3))
 def _activity_by_hour():
     return load_activity_by_hour(_engine())
 
 
-@st.cache_data
+@st.cache_data(ttl=timedelta(hours=3))
 def _plays_for_day(day):
     # day is a datetime.date — cache keys on its ISO representation.
     return load_plays_for_day(_engine(), day)
