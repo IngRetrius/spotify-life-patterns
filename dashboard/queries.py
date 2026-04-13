@@ -144,3 +144,40 @@ def load_activity_counts(engine) -> pd.DataFrame:
         ORDER BY sessions DESC
     """
     return pd.read_sql(query, engine)
+
+
+def load_plays_for_day(engine, day) -> pd.DataFrame:
+    """
+    Plays that happened on a given calendar day (America/Bogota).
+
+    The date filter is applied after the timezone conversion so a play
+    that happened at 01:00 Bogota on Apr 13 shows up on Apr 13 — even
+    though its UTC timestamp would already be April 14 in some cases.
+    """
+    query = """
+        SELECT
+            (played_at AT TIME ZONE 'America/Bogota') AS played_at_local,
+            track_name,
+            artist_name,
+            ROUND(duration_ms / 60000.0, 2) AS duration_minutes
+        FROM raw_plays
+        WHERE (played_at AT TIME ZONE 'America/Bogota')::date = :day
+        ORDER BY played_at_local ASC
+    """
+    return pd.read_sql(text(query), engine, params={"day": day})
+
+
+def load_available_dates(engine) -> pd.DataFrame:
+    """
+    Distinct calendar days (Bogota) that contain at least one play.
+
+    Used by the date picker to set min/max bounds and highlight days
+    that actually have data.
+    """
+    query = """
+        SELECT DISTINCT
+            (played_at AT TIME ZONE 'America/Bogota')::date AS day
+        FROM raw_plays
+        ORDER BY day DESC
+    """
+    return pd.read_sql(query, engine)

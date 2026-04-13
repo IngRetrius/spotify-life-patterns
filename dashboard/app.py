@@ -30,6 +30,8 @@ from dashboard.queries import (
     load_top_tracks,
     load_plays_by_hour,
     load_activity_counts,
+    load_plays_for_day,
+    load_available_dates,
 )
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -141,6 +143,17 @@ def _plays_by_hour():
 @st.cache_data
 def _activity_counts():
     return load_activity_counts(_engine())
+
+
+@st.cache_data
+def _available_dates():
+    return load_available_dates(_engine())
+
+
+@st.cache_data
+def _plays_for_day(day):
+    # day is a datetime.date — cache keys on its ISO representation.
+    return load_plays_for_day(_engine(), day)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -270,7 +283,89 @@ with col_table:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# ── 3. Patterns ───────────────────────────────────────────────────────────────
+# ── 3. Day detail ─────────────────────────────────────────────────────────────
+
+section("Day Detail")
+
+dates_df = _available_dates()
+
+if dates_df.empty:
+    st.info("No play data available yet.")
+else:
+    available = pd.to_datetime(dates_df["day"]).dt.date
+    min_day, max_day = available.min(), available.max()
+    default_day = max_day  # open on the most recent day with data
+
+    col_picker, col_summary = st.columns([1, 3], gap="large")
+
+    with col_picker:
+        selected_day = st.date_input(
+            "Pick a day",
+            value=default_day,
+            min_value=min_day,
+            max_value=max_day,
+            help="Only days with listening activity are in range.",
+        )
+        has_data = selected_day in set(available)
+        if not has_data:
+            st.caption(f"No plays on {selected_day}. Try another date.")
+
+    with col_summary:
+        if has_data:
+            day_plays = _plays_for_day(selected_day)
+
+            sessions_df_all = _sessions()
+            sessions_df_all["date"] = pd.to_datetime(sessions_df_all["start_time"]).dt.date
+            day_sessions = sessions_df_all[sessions_df_all["date"] == selected_day]
+
+            n_plays = len(day_plays)
+            total_min = float(day_plays["duration_minutes"].sum())
+            n_sessions = len(day_sessions)
+            top_activity = (
+                day_sessions["activity_label"].mode().iloc[0]
+                if not day_sessions.empty else "-"
+            )
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Plays",          n_plays)
+            m2.metric("Minutes",        f"{total_min:.0f}")
+            m3.metric("Sessions",       n_sessions)
+            m4.metric("Top activity",   top_activity.capitalize())
+
+    if has_data:
+        if not day_sessions.empty:
+            st.markdown("**Sessions that day**")
+            day_display = format_sessions_table(day_sessions)
+            st.dataframe(
+                day_display,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Confidence": st.column_config.ProgressColumn(
+                        "Confidence",
+                        min_value=0.0,
+                        max_value=1.0,
+                        format="%.2f",
+                    ),
+                },
+            )
+
+        st.markdown("**Tracks played that day**")
+        tracks_view = day_plays.copy()
+        tracks_view["played_at_local"] = pd.to_datetime(
+            tracks_view["played_at_local"]
+        ).dt.strftime("%H:%M")
+        tracks_view = tracks_view.rename(columns={
+            "played_at_local":  "Time",
+            "track_name":       "Track",
+            "artist_name":      "Artist",
+            "duration_minutes": "Duration (min)",
+        })
+        st.dataframe(tracks_view, use_container_width=True, hide_index=True)
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# ── 4. Patterns ───────────────────────────────────────────────────────────────
 
 section("Listening Patterns")
 
