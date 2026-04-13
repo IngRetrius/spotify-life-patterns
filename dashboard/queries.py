@@ -1,13 +1,13 @@
 """
-Consultas SQL para el dashboard.
+SQL queries for the dashboard.
 
-Separamos las queries de la UI para que:
-- sea facil cambiar la fuente de datos sin tocar el layout
-- cada funcion tenga una responsabilidad clara
-- se puedan testear las queries de forma aislada
+Keeping queries out of the UI so we can:
+- swap the data source without touching the layout
+- give each function a single responsibility
+- test queries in isolation
 
-Todas las funciones reciben un SQLAlchemy engine y retornan DataFrames.
-Usamos SQLAlchemy (no psycopg2 crudo) porque pandas.read_sql lo requiere.
+Every function takes a SQLAlchemy engine and returns a DataFrame.
+We use SQLAlchemy (not raw psycopg2) because pandas.read_sql expects it.
 """
 
 import os
@@ -28,13 +28,13 @@ load_dotenv()
 
 def load_kpis(engine) -> dict:
     """
-    Metricas de alto nivel para las tarjetas del header.
+    Top-level metrics shown in the header KPI cards.
 
-    Retorna un dict con:
-    - total_plays      : numero de reproducciones registradas
-    - total_minutes    : minutos totales escuchados
-    - total_sessions   : sesiones detectadas
-    - top_activity     : actividad mas frecuente entre las etiquetadas
+    Returns a dict with:
+    - total_plays      : number of plays recorded
+    - total_minutes    : total minutes listened
+    - total_sessions   : sessions detected
+    - top_activity     : most frequent label (excluding 'unknown')
     """
     with engine.connect() as conn:
         plays_row = conn.execute(text(
@@ -55,7 +55,7 @@ def load_kpis(engine) -> dict:
             "ORDER BY cnt DESC LIMIT 1"
         )).fetchone()
 
-    top_activity = activity_row[0] if activity_row else "sin datos"
+    top_activity = activity_row[0] if activity_row else "no data"
 
     return {
         "total_plays":    int(plays_row[0]),
@@ -67,10 +67,10 @@ def load_kpis(engine) -> dict:
 
 def load_sessions(engine) -> pd.DataFrame:
     """
-    Sesiones con sus features y etiquetas de actividad.
+    Sessions joined with their features and activity labels.
 
-    Hace un LEFT JOIN para que sesiones sin etiqueta (si las hay)
-    aparezcan igual con activity_label = NULL.
+    LEFT JOIN so sessions without a label (if any) still show up with
+    activity_label = NULL, replaced downstream with 'unlabeled'.
     """
     query = """
         SELECT
@@ -95,7 +95,7 @@ def load_sessions(engine) -> pd.DataFrame:
 
 
 def load_top_tracks(engine, limit: int = 10) -> pd.DataFrame:
-    """Top tracks por numero de reproducciones."""
+    """Top tracks by play count."""
     query = f"""
         SELECT
             track_name,
@@ -111,10 +111,10 @@ def load_top_tracks(engine, limit: int = 10) -> pd.DataFrame:
 
 def load_plays_by_hour(engine) -> pd.DataFrame:
     """
-    Distribucion de reproducciones por hora del dia.
+    Plays distribution by hour of day.
 
-    Convierte a hora de Colombia (UTC-5) para que los patrones
-    reflejen el comportamiento real del usuario.
+    Converts to Bogota local time (UTC-5) so the patterns reflect
+    the user's actual behavior.
     """
     query = """
         SELECT
@@ -125,7 +125,7 @@ def load_plays_by_hour(engine) -> pd.DataFrame:
         ORDER BY hour
     """
     df = pd.read_sql(query, engine)
-    # Rellenar horas sin plays con 0 para que el grafico sea continuo
+    # Fill missing hours with 0 so the bar chart is continuous
     all_hours = pd.DataFrame({"hour": range(24)})
     df = all_hours.merge(df, on="hour", how="left").fillna(0)
     df["plays"] = df["plays"].astype(int)
@@ -133,7 +133,7 @@ def load_plays_by_hour(engine) -> pd.DataFrame:
 
 
 def load_activity_counts(engine) -> pd.DataFrame:
-    """Conteo de sesiones por actividad para el grafico de barras."""
+    """Session count per activity, for the bar chart."""
     query = """
         SELECT
             activity_label,
