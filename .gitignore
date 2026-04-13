@@ -1,0 +1,46 @@
+# Credenciales y configuración sensible — NUNCA subir al repo
+.env
+.env.*
+*.env
+
+# Caché de autenticación de Spotify (spotipy guarda el token aquí)
+.cache
+.cache-*
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+ENV/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code
+.claude/
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# Datos personales exportados de Spotify
+data/raw/*.json
+data/raw/*.csv
+
+# Logs
+*.log
+logs/

@@ -1,0 +1,19 @@
+# Acceso a Spotify API
+spotipy==2.24.0
+
+# Base de datos — cliente Supabase y conexión directa a Postgres
+supabase==2.10.0
+psycopg2-binary==2.9.10
+sqlalchemy==2.0.36
+
+# Transformación de datos
+pandas==2.2.3
+
+# Variables de entorno
+python-dotenv==1.0.1
+
+# Dashboard
+streamlit==1.40.2
+
+# Utilidades
+tenacity==9.0.0

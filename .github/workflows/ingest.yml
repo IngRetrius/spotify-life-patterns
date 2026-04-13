@@ -1,0 +1,54 @@
+name: Spotify Ingestion Pipeline
+
+# Cuando corre:
+# 1. Automaticamente cada 6 horas (cron)
+# 2. Manualmente desde GitHub Actions tab (workflow_dispatch)
+#    Util para forzar una corrida o hacer debug
+on:
+  schedule:
+    - cron: '0 */6 * * *'   # 00:00, 06:00, 12:00, 18:00 UTC
+  workflow_dispatch:
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10       # falla si tarda mas de 10 min (proteccion contra colgados)
+
+    steps:
+      # 1. Checkout del codigo
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Python con cache de dependencias
+      #    La primera vez instala todo. Las siguientes usa el cache -> mas rapido
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      # 3. Instalar solo las dependencias que necesita la ingesta
+      #    (no streamlit ni pandas, que son pesados y no se usan aqui)
+      - name: Install dependencies
+        run: pip install spotipy psycopg2-binary python-dotenv
+
+      # 4. Reconstruir el archivo .cache de Spotify desde el secret
+      #    GitHub Actions no tiene navegador, entonces no puede hacer el OAuth inicial.
+      #    Guardamos el .cache como secret y lo escribimos antes de correr el script.
+      #    spotipy lee el refresh_token del archivo y renueva el access_token solo.
+      - name: Restore Spotify token cache
+        run: echo '${{ secrets.SPOTIFY_CACHE }}' > .cache
+
+      # 5. Correr la ingesta
+      - name: Run plays ingestion
+        env:
+          SPOTIFY_CLIENT_ID:     ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+          SPOTIFY_REDIRECT_URI:  ${{ secrets.SPOTIFY_REDIRECT_URI }}
+          SUPABASE_DB_PASSWORD:  ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: python ingestion/ingest_plays.py
+
+      # 6. Mostrar resumen en el log de GitHub Actions
+      - name: Summary
+        if: always()
+        run: echo "Pipeline completado en $(date -u '+%Y-%m-%d %H:%M UTC')"
