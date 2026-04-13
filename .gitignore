@@ -33,6 +33,9 @@ ENV/
 # Claude Code
 .claude/
 
+# Archivos temporales con secrets (eliminar despues de usar)
+docs/SPOTIFY_CACHE_SECRET.md
+
 # Sistema operativo
 .DS_Store
 Thumbs.db

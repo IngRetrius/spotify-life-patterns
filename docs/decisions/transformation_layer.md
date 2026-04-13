@@ -91,34 +91,63 @@ vuelva a estar disponible o se use una fuente alternativa.
    una sesion se etiqueto como "gimnasio"
 3. Las reglas generan el dataset de entrenamiento para ML en fase 2
 
+### Por que 3 actividades (no 5)
+
+El diseno original tenia 5 reglas: ducha, gimnasio, moto, trabajo, descanso.
+El problema: sin audio features, moto y trabajo son indistinguibles solo
+por duracion y hora. Una sesion de 103 minutos a las 3am se etiquetaba
+como "moto" cuando claramente es estudio nocturno.
+
+Decision: reducir a 3 actividades con senales temporales claras y mutuamente
+exclusivas:
+
+| Actividad | Senal dominante          | Diferenciador de hora        |
+|-----------|--------------------------|------------------------------|
+| ducha     | Duracion muy corta 5-20m | Manana (6-10h) o noche (20-23h) |
+| gimnasio  | Duracion 35-110m         | Dia/tarde (5-10h o 16-22h)   |
+| tareas    | Duracion > 40m           | Madrugada (0-5h o 22-23h)    |
+
+El bonus de hora es el discriminador clave: gimnasio y tareas pueden
+durar lo mismo (60-90 min), pero el gym no ocurre a las 3am.
+
 ### Sistema de confidence scores
 
 Cada regla suma puntos por condicion cumplida (total posible = 1.0).
 Se elige la regla con mayor score. Si ninguna supera 0.4 → "desconocido".
 
 ```python
-def rule_gimnasio(row):
-    score = 0.0
-    if 40 <= row["duration_minutes"] <= 100:  score += 0.4  # condicion principal
-    if row["n_skips"] <= 2:                    score += 0.3  # musica continua
-    if row["day_of_week"] in [0,1,2,3,4]:     score += 0.15 # entre semana
-    if row["hour_of_day"] in [5..8, 17..20]:  score += 0.15 # horario gym
-    return score
+SHOWER_HOURS      = set(range(6, 11))  | set(range(20, 24))   # 6-10h y 20-23h
+GYM_HOURS         = set(range(5, 11))  | set(range(16, 23))   # 5-10h y 16-22h
+NIGHT_STUDY_HOURS = set(range(22, 24)) | set(range(0, 6))     # 22-23h y 0-5h
+
+def rule_ducha(row):     # max 0.5 + 0.3 + 0.2 = 1.0
+    if 5 <= duration <= 20:        score += 0.5  # condicion principal
+    if n_skips == 0:               score += 0.3  # no puede tocar el telefono
+    if hour in SHOWER_HOURS:       score += 0.2  # horario tipico de aseo
+
+def rule_gimnasio(row):  # max 0.4 + 0.3 + 0.3 = 1.0
+    if 35 <= duration <= 110:      score += 0.4  # duracion tipica
+    if n_skips <= 2:               score += 0.3  # musica continua
+    if hour in GYM_HOURS:          score += 0.3  # 5-10am o 4-10pm
+
+def rule_tareas(row):    # max 0.5 + 0.2 + 0.3 = 1.0
+    if duration > 40:              score += 0.5  # sesion larga
+    if n_skips <= 5:               score += 0.2  # musica de fondo
+    if hour in NIGHT_STUDY_HOURS:  score += 0.3  # madrugada = estudio
 ```
+
+Resultados con las 4 sesiones actuales:
+
+| Sesion       | Dur    | Hora | Skips | Etiqueta  | Score |
+|--------------|--------|------|-------|-----------|-------|
+| 38e0b333...  | 103.5m | 3h   | 0     | tareas    | 1.00  |
+| 74ca3bf1...  | 14.5m  | 17h  | 0     | ducha     | 0.80  |
+| 44158cee...  | 62.3m  | 20h  | 2     | gimnasio  | 1.00  |
+| 83e34a9d...  | 2.6m   | 23h  | 0     | ducha     | 0.50  |
 
 El score no es una probabilidad estadistica — es una medida de cuantas
 condiciones se cumplen. Con mas datos, se puede reemplazar con un clasificador
 que si produzca probabilidades reales.
-
-### Limitacion actual: moto vs ducha
-
-Con solo patrones temporales, sesiones cortas (< 15 min) sin skips pueden
-ser ducha O moto. La diferencia real seria: BPM alto + energia alta para ducha,
-variabilidad de BPM para moto. Sin audio features, ambas se etiquetan como moto
-porque esa regla tiene mayor score promedio.
-
-Cuando llegue el historial extendido (30 dias), los patrones recurrentes
-(misma hora, mismo dia de semana) permitiran distinguirlas mejor.
 
 ---
 
