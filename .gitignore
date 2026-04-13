@@ -1,7 +1,9 @@
 # Credenciales y configuración sensible — NUNCA subir al repo
 .env
-.env.*
+.env.local
+.env.*.local
 *.env
+# .env.example is intentionally NOT ignored (it's a public template)
 
 # Caché de autenticación de Spotify (spotipy guarda el token aquí)
 .cache

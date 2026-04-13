@@ -31,7 +31,7 @@ MIGRATIONS_DIR = os.path.join(os.path.dirname(__file__), "..", "migrations")
 # Usamos parámetros keyword (no URL) para evitar problemas de
 # URL-encoding con caracteres especiales en la contraseña (ej: * $ @ #).
 _PROJECT_REF = "ofjjslcrzzllzaiiygya"
-_PASSWORD = os.getenv("SUPABASE_DB_PASSWORD", "Briguitte98*")
+_PASSWORD = os.getenv("SUPABASE_DB_PASSWORD")
 
 _CANDIDATES = [
     # 1. Pooler transaction mode — puerto 6543 (el más disponible en Supabase free tier)
