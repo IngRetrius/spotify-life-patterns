@@ -32,6 +32,7 @@ from dashboard.queries import (
     load_activity_counts,
     load_plays_for_day,
     load_available_dates,
+    load_activity_by_hour,
 )
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -148,6 +149,11 @@ def _activity_counts():
 @st.cache_data
 def _available_dates():
     return load_available_dates(_engine())
+
+
+@st.cache_data
+def _activity_by_hour():
+    return load_activity_by_hour(_engine())
 
 
 @st.cache_data
@@ -412,6 +418,37 @@ with col_tracks:
         st.plotly_chart(fig_tracks, use_container_width=True)
     else:
         st.info("No play data found.")
+
+act_hour_df = _activity_by_hour()
+
+if not act_hour_df.empty:
+    fig_act_hour = px.bar(
+        act_hour_df,
+        x="hour",
+        y="sessions",
+        color="activity_label",
+        color_discrete_map=ACTIVITY_COLORS,
+        barmode="stack",
+        labels={
+            "hour":           "Hour of Day (Bogota)",
+            "sessions":       "Sessions",
+            "activity_label": "Activity",
+        },
+        title="Activity by Hour of Day",
+    )
+    fig_act_hour.update_layout(
+        **CHART_LAYOUT,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+        ),
+    )
+    fig_act_hour.update_xaxes(tickvals=list(range(0, 24, 2)))
+    fig_act_hour.for_each_trace(lambda t: t.update(name=t.name.capitalize()))
+    st.plotly_chart(fig_act_hour, use_container_width=True)
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 

@@ -181,3 +181,39 @@ def load_available_dates(engine) -> pd.DataFrame:
         ORDER BY day DESC
     """
     return pd.read_sql(query, engine)
+
+
+def load_activity_by_hour(engine) -> pd.DataFrame:
+    """
+    Session count per hour of day, broken down by activity label.
+
+    Joins sessions (which store hour_of_day) with activity_labels so we
+    can see which activities cluster at which times of day.  The result
+    is used for a stacked bar chart in the Listening Patterns section.
+    """
+    query = """
+        SELECT
+            s.hour_of_day AS hour,
+            al.activity_label,
+            COUNT(*) AS sessions
+        FROM sessions s
+        JOIN activity_labels al ON s.session_id = al.session_id
+        GROUP BY s.hour_of_day, al.activity_label
+        ORDER BY s.hour_of_day, al.activity_label
+    """
+    df = pd.read_sql(query, engine)
+    if df.empty:
+        return df
+
+    # Ensure every hour (0-23) x every activity combination is present
+    # so gaps render as 0-height bars, keeping the x-axis continuous.
+    activities = df["activity_label"].unique().tolist()
+    grid = (
+        pd.DataFrame({"hour": range(24)})
+        .assign(key=1)
+        .merge(pd.DataFrame({"activity_label": activities, "key": 1}), on="key")
+        .drop(columns="key")
+    )
+    df = grid.merge(df, on=["hour", "activity_label"], how="left").fillna(0)
+    df["sessions"] = df["sessions"].astype(int)
+    return df
