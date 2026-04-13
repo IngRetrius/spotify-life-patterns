@@ -25,6 +25,11 @@ from spotipy.exceptions import SpotifyException
 from dotenv import load_dotenv
 import os
 
+# Allow `python ingestion/ingest_plays.py` from project root.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from db.connection import get_connection as get_db_connection
+
 load_dotenv()
 
 # ── Constantes ───────────────────────────────────────────────────────────────
@@ -46,18 +51,6 @@ def get_spotify_client() -> spotipy.Spotify:
         scope=SPOTIFY_SCOPE,
         cache_path=".cache",
     ))
-
-
-def get_db_connection():
-    """Retorna conexion directa a Postgres en Supabase."""
-    return psycopg2.connect(
-        host="aws-1-us-east-1.pooler.supabase.com",
-        port=6543,
-        user="postgres.ofjjslcrzzllzaiiygya",
-        password=os.getenv("SUPABASE_DB_PASSWORD"),
-        dbname="postgres",
-        sslmode="require",
-    )
 
 
 # ── Logica de Spotify ─────────────────────────────────────────────────────────

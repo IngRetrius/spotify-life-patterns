@@ -10,57 +10,18 @@ Todas las funciones reciben un SQLAlchemy engine y retornan DataFrames.
 Usamos SQLAlchemy (no psycopg2 crudo) porque pandas.read_sql lo requiere.
 """
 
-import pandas as pd
-from sqlalchemy import create_engine, text
-from dotenv import load_dotenv
 import os
+import sys
+
+import pandas as pd
+from sqlalchemy import text
+from dotenv import load_dotenv
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from db.connection import get_engine  # re-exported for backward compat
 
 load_dotenv()
-
-
-# ── Conexion ──────────────────────────────────────────────────────────────────
-
-def _get_password() -> str:
-    """
-    Lee SUPABASE_DB_PASSWORD desde dos fuentes segun el ambiente:
-
-    - Local: cargado por python-dotenv desde el archivo .env
-    - Streamlit Cloud: disponible en st.secrets (no es una env var automatica)
-
-    Si ninguna fuente tiene el valor, lanza un error claro en vez de
-    intentar conectarse con una URL invalida.
-    """
-    password = os.getenv("SUPABASE_DB_PASSWORD")
-    if not password:
-        try:
-            import streamlit as st
-            password = st.secrets.get("SUPABASE_DB_PASSWORD")
-        except Exception:
-            pass
-    if not password:
-        raise EnvironmentError(
-            "SUPABASE_DB_PASSWORD not found. "
-            "Set it in .env (local) or Streamlit Cloud secrets (deploy)."
-        )
-    return password
-
-
-def get_engine():
-    """
-    Crea un SQLAlchemy engine apuntando al pooler de Supabase.
-
-    Por que SQLAlchemy y no psycopg2 directo:
-    - pandas.read_sql espera un engine o una URL de conexion
-    - psycopg2 crudo genera UserWarning en pandas >= 2.0
-    - SQLAlchemy permite reutilizar la conexion con st.cache_resource
-    """
-    password = _get_password()
-    url = (
-        f"postgresql+psycopg2://postgres.ofjjslcrzzllzaiiygya:{password}"
-        f"@aws-1-us-east-1.pooler.supabase.com:6543/postgres"
-        f"?sslmode=require"
-    )
-    return create_engine(url)
 
 
 # ── Queries ───────────────────────────────────────────────────────────────────

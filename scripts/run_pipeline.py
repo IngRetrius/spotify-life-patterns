@@ -29,11 +29,11 @@ import os
 import sys
 import time
 
-import psycopg2
 from dotenv import load_dotenv
 
 sys.path.insert(0, ".")
 
+from db.connection                   import get_connection
 from ingestion.ingest_plays          import run as run_plays
 from ingestion.ingest_audio_features import run as run_audio_features
 from ingestion.ingest_artists        import run as run_artists
@@ -56,21 +56,10 @@ STEPS = [
 ]
 
 
-def _get_connection():
-    return psycopg2.connect(
-        host="aws-1-us-east-1.pooler.supabase.com",
-        port=6543,
-        user="postgres.ofjjslcrzzllzaiiygya",
-        password=os.getenv("SUPABASE_DB_PASSWORD"),
-        dbname="postgres",
-        sslmode="require",
-    )
-
-
 def _count_rows(table: str) -> int | None:
     """Return COUNT(*) of a table, or None if the query fails."""
     try:
-        conn = _get_connection()
+        conn = get_connection()
         cur = conn.cursor()
         cur.execute(f"SELECT COUNT(*) FROM {table}")
         (n,) = cur.fetchone()

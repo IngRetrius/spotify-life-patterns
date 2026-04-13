@@ -37,6 +37,10 @@ import psycopg2.extras
 from dotenv import load_dotenv
 import os
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from db.connection import get_connection as get_db_connection
+
 load_dotenv()
 
 # ── Hour windows per activity ─────────────────────────────────────────────────
@@ -61,19 +65,6 @@ AISLADO_MAX_MINUTES = 5
 AISLADO_MAX_TRACKS  = 2
 
 MIN_CONFIDENCE = 0.4
-
-
-# ── Connection ────────────────────────────────────────────────────────────────
-
-def get_db_connection():
-    return psycopg2.connect(
-        host="aws-1-us-east-1.pooler.supabase.com",
-        port=6543,
-        user="postgres.ofjjslcrzzllzaiiygya",
-        password=os.getenv("SUPABASE_DB_PASSWORD"),
-        dbname="postgres",
-        sslmode="require",
-    )
 
 
 # ── Data loading ──────────────────────────────────────────────────────────────

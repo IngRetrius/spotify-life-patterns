@@ -26,23 +26,14 @@ import psycopg2.extras
 from dotenv import load_dotenv
 import os
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from db.connection import get_connection as get_db_connection
+
 load_dotenv()
 
 NAMESPACE        = uuid.NAMESPACE_URL
 SKIP_THRESHOLD   = 0.5    # se considera skip si se escucho menos del 50%
-
-
-# ── Conexion ──────────────────────────────────────────────────────────────────
-
-def get_db_connection():
-    return psycopg2.connect(
-        host="aws-1-us-east-1.pooler.supabase.com",
-        port=6543,
-        user="postgres.ofjjslcrzzllzaiiygya",
-        password=os.getenv("SUPABASE_DB_PASSWORD"),
-        dbname="postgres",
-        sslmode="require",
-    )
 
 
 # ── Carga de datos ────────────────────────────────────────────────────────────
