@@ -21,7 +21,14 @@ jobs:
           cache: 'pip'
 
       - name: Install dependencies
-        run: pip install spotipy psycopg2-binary python-dotenv pandas sqlalchemy
+        run: pip install spotipy psycopg2-binary python-dotenv pandas sqlalchemy pytest
+
+      # Transformation-layer tests. They use hand-built pandas DataFrames
+      # and do not touch the database, so they can run before we spend a
+      # Spotify API call. If the business logic is broken, fail fast here
+      # instead of silently writing bad labels to Supabase.
+      - name: Run pipeline tests
+        run: python -m pytest tests/ -v
 
       # Rebuilds the Spotify .cache from the repo secret
       - name: Restore Spotify token cache
