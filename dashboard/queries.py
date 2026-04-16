@@ -1,5 +1,6 @@
 """
 SQL queries for the dashboard.
+# noqa: cache-bust
 
 Keeping queries out of the UI so we can:
 - swap the data source without touching the layout
