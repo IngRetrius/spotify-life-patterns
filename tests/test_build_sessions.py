@@ -97,3 +97,42 @@ class TestBuildSessionRecords:
     def test_session_id_is_deterministic(self):
         start = pd.Timestamp("2025-04-01T10:00:00Z")
         assert make_session_id(start) == make_session_id(start)
+
+
+class TestBuildSessionRecordsTz:
+    """Regression tests for the America/Bogota (UTC-5) timezone fix.
+
+    hour_of_day and day_of_week must reflect local Bogota time, not UTC.
+    See .planning/phases/01-timezone-fix/01-CONTEXT.md for background.
+    """
+
+    def test_hour_of_day_uses_bogota_time_not_utc(self):
+        # 05:00 UTC == 00:00 Bogota (UTC-5). hour_of_day must be 0, not 5.
+        plays = _plays([("2025-04-01T05:00:00Z", 180_000)])
+        assigned = assign_sessions(plays)
+        records = build_session_records(assigned)
+
+        assert records[0]["hour_of_day"] == 0, (
+            "05:00 UTC must map to midnight Bogota (hour 0), not 5"
+        )
+
+    def test_day_of_week_uses_bogota_time_not_utc(self):
+        # Monday 03:00 UTC == Sunday 22:00 Bogota.
+        # day_of_week must be 6 (Sun), not 0 (Mon).
+        plays = _plays([("2025-04-07T03:00:00Z", 180_000)])
+        assigned = assign_sessions(plays)
+        records = build_session_records(assigned)
+
+        assert records[0]["day_of_week"] == 6, (
+            "Monday 03:00 UTC must map to Sunday in Bogota (day_of_week=6), not 0"
+        )
+
+    def test_hour_of_day_mid_afternoon(self):
+        # 20:00 UTC == 15:00 Bogota. Regression guard on non-midnight-crossing cases.
+        plays = _plays([("2025-04-01T20:00:00Z", 180_000)])
+        assigned = assign_sessions(plays)
+        records = build_session_records(assigned)
+
+        assert records[0]["hour_of_day"] == 15, (
+            "20:00 UTC must map to 15:00 Bogota, not 20"
+        )

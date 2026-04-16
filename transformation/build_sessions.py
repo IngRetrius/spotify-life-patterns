@@ -110,14 +110,18 @@ def build_session_records(df: pd.DataFrame) -> list[dict]:
 
         duration_minutes = (end_time - start_time).total_seconds() / 60
 
+        # Convert to Bogota local time to get the correct hour and weekday.
+        # start_time is UTC-aware; .tz_convert shifts it to America/Bogota (UTC-5).
+        start_local = start_time.tz_convert("America/Bogota")
+
         sessions.append({
             "session_id":       make_session_id(start_time),
             "start_time":       start_time.isoformat(),
             "end_time":         end_time.isoformat(),
             "duration_minutes": round(duration_minutes, 2),
             "n_tracks":         len(group),
-            "hour_of_day":      start_time.hour,
-            "day_of_week":      start_time.dayofweek,   # 0=lunes, 6=domingo
+            "hour_of_day":      start_local.hour,
+            "day_of_week":      start_local.dayofweek,   # 0=Mon, 6=Sun
         })
 
     return sessions
@@ -131,7 +135,9 @@ UPSERT_SESSION_SQL = """
     VALUES
         (%(session_id)s, %(start_time)s, %(end_time)s, %(duration_minutes)s,
          %(n_tracks)s, %(hour_of_day)s, %(day_of_week)s)
-    ON CONFLICT (session_id) DO NOTHING;
+    ON CONFLICT (session_id) DO UPDATE SET
+        hour_of_day = EXCLUDED.hour_of_day,
+        day_of_week = EXCLUDED.day_of_week;
 """
 
 
