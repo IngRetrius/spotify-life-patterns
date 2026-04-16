@@ -34,6 +34,7 @@ from dashboard.queries import (
     load_plays_for_day,
     load_available_dates,
     load_activity_by_hour,
+    load_plays_by_country,
 )
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -161,6 +162,11 @@ def _activity_by_hour():
 def _plays_for_day(day):
     # day is a datetime.date — cache keys on its ISO representation.
     return load_plays_for_day(_engine(), day)
+
+
+@st.cache_data(ttl=timedelta(hours=3))
+def _plays_by_country():
+    return load_plays_by_country(_engine())
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -450,6 +456,107 @@ if not act_hour_df.empty:
     fig_act_hour.update_xaxes(tickvals=list(range(0, 24, 2)))
     fig_act_hour.for_each_trace(lambda t: t.update(name=t.name.capitalize()))
     st.plotly_chart(fig_act_hour, use_container_width=True)
+
+# ── 5. Global Footprint ───────────────────────────────────────────────────────
+
+st.markdown("<br>", unsafe_allow_html=True)
+section("Global Footprint")
+
+# ISO alpha-2 → country name mapping for the countries in the dataset
+_COUNTRY_NAMES = {
+    "CO": "Colombia",
+    "US": "United States",
+    "TR": "Turkey",
+    "ES": "Spain",
+    "DE": "Germany",
+    "PA": "Panama",
+    "IT": "Italy",
+    "MX": "Mexico",
+    "FR": "France",
+    "PT": "Portugal",
+    "NL": "Netherlands",
+}
+
+country_df = _plays_by_country()
+
+if not country_df.empty:
+    country_df["country_name"] = country_df["country_code"].map(
+        lambda c: _COUNTRY_NAMES.get(c, c)
+    )
+
+    col_map, col_bar = st.columns([3, 2], gap="large")
+
+    with col_map:
+        fig_map = px.choropleth(
+            country_df,
+            locations="country_name",
+            locationmode="country names",
+            color="plays",
+            hover_name="country_name",
+            hover_data={"country_name": False, "plays": True, "minutes_played": True},
+            color_continuous_scale=[
+                [0.0,  "#e8f5e9"],
+                [0.15, "#a5d6a7"],
+                [0.4,  "#4CAF50"],
+                [0.7,  "#2E7D32"],
+                [1.0,  "#1B5E20"],
+            ],
+            title="Plays by Country",
+            labels={"plays": "Plays", "minutes_played": "Minutes"},
+        )
+        fig_map.update_layout(
+            **CHART_LAYOUT,
+            geo=dict(
+                showframe=False,
+                showcoastlines=True,
+                coastlinecolor="#dee2e6",
+                showland=True,
+                landcolor="#f8f9fa",
+                showocean=True,
+                oceancolor="#e9ecef",
+                projection_type="natural earth",
+            ),
+            coloraxis_colorbar=dict(
+                title="Plays",
+                thickness=12,
+                len=0.6,
+            ),
+        )
+        fig_map.update_traces(
+            hovertemplate=(
+                "<b>%{hovertext}</b><br>"
+                "Plays: %{z:,}<br>"
+                "Minutes: %{customdata[1]:,.0f}<extra></extra>"
+            )
+        )
+        st.plotly_chart(fig_map, use_container_width=True)
+
+    with col_bar:
+        fig_country = px.bar(
+            country_df.sort_values("plays"),
+            x="plays",
+            y="country_name",
+            orientation="h",
+            text="plays",
+            color="plays",
+            color_continuous_scale=[
+                [0.0, "#a5d6a7"],
+                [1.0, "#1B5E20"],
+            ],
+            labels={"plays": "Plays", "country_name": ""},
+            title="Plays by Country",
+        )
+        fig_country.update_layout(
+            **CHART_LAYOUT,
+            showlegend=False,
+            coloraxis_showscale=False,
+        )
+        fig_country.update_traces(
+            texttemplate="%{text:,}",
+            textposition="outside",
+            hovertemplate="<b>%{y}</b><br>Plays: %{x:,}<extra></extra>",
+        )
+        st.plotly_chart(fig_country, use_container_width=True)
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 

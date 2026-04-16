@@ -97,14 +97,17 @@ def parse_record(record: dict) -> dict | None:
 
     track_id = parts[2]
 
+    country = record.get("conn_country")
+
     return {
-        "track_id":   track_id,
-        "track_name": track_name,
-        "artist_id":  make_artist_id(artist_name),
+        "track_id":    track_id,
+        "track_name":  track_name,
+        "artist_id":   make_artist_id(artist_name),
         "artist_name": artist_name,
-        "album_name": record.get("master_metadata_album_album_name"),
+        "album_name":  record.get("master_metadata_album_album_name"),
         "duration_ms": record.get("ms_played"),
-        "played_at":  record.get("ts"),
+        "played_at":   record.get("ts"),
+        "conn_country": country if country and country != "ZZ" else None,
     }
 
 
@@ -128,11 +131,15 @@ def load_file(filepath: str) -> list[dict]:
 
 UPSERT_SQL = """
     INSERT INTO raw_plays
-        (track_id, track_name, artist_id, artist_name, album_name, duration_ms, played_at)
+        (track_id, track_name, artist_id, artist_name, album_name, duration_ms, played_at,
+         conn_country)
     VALUES
         (%(track_id)s, %(track_name)s, %(artist_id)s, %(artist_name)s,
-         %(album_name)s, %(duration_ms)s, %(played_at)s)
-    ON CONFLICT (track_id, played_at) DO NOTHING;
+         %(album_name)s, %(duration_ms)s, %(played_at)s,
+         %(conn_country)s)
+    ON CONFLICT (track_id, played_at) DO UPDATE SET
+        conn_country = EXCLUDED.conn_country
+    WHERE raw_plays.conn_country IS NULL;
 """
 
 

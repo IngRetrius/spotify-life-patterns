@@ -183,6 +183,26 @@ def load_available_dates(engine) -> pd.DataFrame:
     return pd.read_sql(query, engine)
 
 
+def load_plays_by_country(engine) -> pd.DataFrame:
+    """
+    Plays y minutos escuchados por pais de conexion (ISO alpha-2).
+
+    Excluye filas sin pais (registros de API sin conn_country, y los
+    reproducidos con VPN/ZZ que ya se almacenaron como NULL).
+    """
+    query = """
+        SELECT
+            conn_country                                        AS country_code,
+            COUNT(*)                                            AS plays,
+            ROUND(SUM(duration_ms) / 60000.0, 1)               AS minutes_played
+        FROM raw_plays
+        WHERE conn_country IS NOT NULL
+        GROUP BY conn_country
+        ORDER BY plays DESC
+    """
+    return pd.read_sql(query, engine)
+
+
 def load_activity_by_hour(engine) -> pd.DataFrame:
     """
     Session count per hour of day, broken down by activity label.
