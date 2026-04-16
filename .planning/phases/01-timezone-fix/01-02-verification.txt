@@ -1,0 +1,16 @@
+=== Verification: hour_of_day vs Bogota-local hour ===
+
+--- Q1: Diagnostic sample of mismatched rows (should be EMPTY) ---
+(0 rows)  <-- PASS: no mismatches found
+
+--- Q2: Count of mismatched hour_of_day rows ---
+mismatched_rows = 0
+
+--- Q3: Total rows in sessions (sanity check) ---
+total_rows = 24
+
+--- Q4: Count of mismatched day_of_week rows (Mon=0 .. Sun=6) ---
+dow_mismatched_rows = 0
+
+=== VERDICT ===
+PASS: 24 rows, 0 hour mismatches, 0 day_of_week mismatches.
