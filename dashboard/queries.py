@@ -66,9 +66,12 @@ def load_kpis(engine) -> dict:
     }
 
 
-def load_sessions(engine) -> pd.DataFrame:
+def load_sessions(engine, limit: int = 50, offset: int = 0) -> pd.DataFrame:
     """
     Sessions joined with their features and activity labels.
+
+    Results are paginated (server-side LIMIT/OFFSET) and ordered by
+    start_time DESC. Default page size is 50 rows.
 
     LEFT JOIN so sessions without a label (if any) still show up with
     activity_label = NULL, replaced downstream with 'unlabeled'.
@@ -88,11 +91,19 @@ def load_sessions(engine) -> pd.DataFrame:
         LEFT JOIN session_features sf ON s.session_id = sf.session_id
         LEFT JOIN activity_labels  al ON s.session_id = al.session_id
         ORDER BY s.start_time DESC
+        LIMIT :limit OFFSET :offset
     """
-    df = pd.read_sql(query, engine)
+    df = pd.read_sql(text(query), engine, params={"limit": limit, "offset": offset})
     df["n_skips"] = df["n_skips"].fillna(0).astype(int)
     df["activity_label"] = df["activity_label"].fillna("unlabeled")
     return df
+
+
+def count_sessions(engine) -> int:
+    """Total number of sessions. Used by the dashboard to compute page count."""
+    with engine.connect() as conn:
+        row = conn.execute(text("SELECT COUNT(*) FROM sessions")).fetchone()
+    return int(row[0]) if row else 0
 
 
 def load_top_tracks(engine, limit: int = 10) -> pd.DataFrame:
@@ -166,6 +177,39 @@ def load_plays_for_day(engine, day) -> pd.DataFrame:
         ORDER BY played_at_local ASC
     """
     return pd.read_sql(text(query), engine, params={"day": day})
+
+
+def load_sessions_for_day(engine, day) -> pd.DataFrame:
+    """
+    Sessions that started on a given calendar day (America/Bogota).
+
+    Same column shape as ``load_sessions``, filtered in SQL so the
+    dashboard doesn't have to pull the full table just to inspect one
+    day. The date filter is applied after the timezone conversion, so a
+    session that started at 01:00 Bogota on Apr 13 shows up on Apr 13 —
+    even though its UTC timestamp would fall on April 13 too (or later).
+    """
+    query = """
+        SELECT
+            s.session_id,
+            s.start_time AT TIME ZONE 'America/Bogota' AS start_time,
+            s.duration_minutes,
+            s.n_tracks,
+            s.hour_of_day,
+            s.day_of_week,
+            sf.n_skips,
+            al.activity_label,
+            al.confidence_score
+        FROM sessions s
+        LEFT JOIN session_features sf ON s.session_id = sf.session_id
+        LEFT JOIN activity_labels  al ON s.session_id = al.session_id
+        WHERE (s.start_time AT TIME ZONE 'America/Bogota')::date = :day
+        ORDER BY s.start_time DESC
+    """
+    df = pd.read_sql(text(query), engine, params={"day": day})
+    df["n_skips"] = df["n_skips"].fillna(0).astype(int)
+    df["activity_label"] = df["activity_label"].fillna("unlabeled")
+    return df
 
 
 def load_available_dates(engine) -> pd.DataFrame:
