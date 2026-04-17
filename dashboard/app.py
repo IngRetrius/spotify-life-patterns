@@ -519,7 +519,7 @@ if not country_df.empty:
             locationmode="country names",
             color="plays",
             hover_name="country_name",
-            hover_data={"country_name": False, "plays": True, "minutes_played": True},
+            custom_data=["plays", "minutes_played"],
             color_continuous_scale=[
                 [0.0,  "#e8f5e9"],
                 [0.15, "#a5d6a7"],
@@ -528,7 +528,6 @@ if not country_df.empty:
                 [1.0,  "#1B5E20"],
             ],
             title="Plays by Country",
-            labels={"plays": "Plays", "minutes_played": "Minutes"},
         )
         fig_map.update_layout(
             **CHART_LAYOUT,
@@ -551,8 +550,8 @@ if not country_df.empty:
         fig_map.update_traces(
             hovertemplate=(
                 "<b>%{hovertext}</b><br>"
-                "Plays: %{z:,}<br>"
-                "Minutes: %{customdata[1]:,.0f}<extra></extra>"
+                "Plays: %{customdata[0]:,}<br>"
+                "Minutes listened: %{customdata[1]:,.0f}<extra></extra>"
             )
         )
         st.plotly_chart(fig_map, use_container_width=True)
