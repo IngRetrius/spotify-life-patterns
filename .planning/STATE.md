@@ -5,7 +5,7 @@ milestone_name: milestone
 status: executing
 stopped_at: Phase 1 context gathered
 last_updated: "2026-04-16T04:07:20.117Z"
-last_activity: 2026-04-16 -- Phase 01 execution started
+last_activity: 2026-04-17 -- Completed quick task 260416-stl: fix ingest_artists.py 400 handling
 progress:
   total_phases: 2
   completed_phases: 0
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-04-15)
 Phase: 01 (timezone-fix) — EXECUTING
 Plan: 1 of 2
 Status: Executing Phase 01
-Last activity: 2026-04-16 -- Phase 01 execution started
+Last activity: 2026-04-17 -- Completed quick task 260416-stl: fix ingest_artists.py 400 handling
 
 Progress: [██░░░░░░░░] 0%
 
@@ -71,6 +71,12 @@ None yet.
 ### Blockers/Concerns
 
 - `build_sessions.py` fix is already on disk but uncommitted — Phase 1 starts from that state
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260416-stl | Fix ingest_artists.py: handle Spotify 400 + pre-filter invalid artist_ids | 2026-04-17 | e2d3dcc | [260416-stl-fix-ingest-artists-py-handle-spotify-400](./quick/260416-stl-fix-ingest-artists-py-handle-spotify-400/) |
 
 ## Deferred Items
 
