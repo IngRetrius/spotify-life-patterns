@@ -28,6 +28,8 @@ from dashboard.queries import (
     get_engine,
     load_kpis,
     load_sessions,
+    count_sessions,
+    load_sessions_for_day,
     load_top_tracks,
     load_plays_by_hour,
     load_activity_counts,
@@ -128,9 +130,24 @@ def _kpis():
     return load_kpis(_engine())
 
 
+SESSIONS_PAGE_SIZE = 50
+
+
 @st.cache_data(ttl=timedelta(hours=3))
-def _sessions():
-    return load_sessions(_engine())
+def _sessions_page(page: int, page_size: int = SESSIONS_PAGE_SIZE):
+    offset = (page - 1) * page_size
+    return load_sessions(_engine(), limit=page_size, offset=offset)
+
+
+@st.cache_data(ttl=timedelta(hours=3))
+def _sessions_count() -> int:
+    return count_sessions(_engine())
+
+
+@st.cache_data(ttl=timedelta(hours=3))
+def _sessions_for_day(day):
+    # day is a datetime.date — cache keys on its ISO representation.
+    return load_sessions_for_day(_engine(), day)
 
 
 @st.cache_data(ttl=timedelta(hours=3))
@@ -274,9 +291,21 @@ with col_chart:
         st.info("No activity labels found. Run label_activities.py first.")
 
 with col_table:
-    sessions_df = _sessions()
+    total_sessions = _sessions_count()
 
-    if not sessions_df.empty:
+    if total_sessions == 0:
+        st.info("No sessions found. Run build_sessions.py first.")
+    else:
+        total_pages = max(1, (total_sessions + SESSIONS_PAGE_SIZE - 1) // SESSIONS_PAGE_SIZE)
+        page = st.number_input(
+            "Page",
+            min_value=1,
+            max_value=total_pages,
+            value=1,
+            step=1,
+            help=f"{total_sessions} sessions total, {SESSIONS_PAGE_SIZE} per page.",
+        )
+        sessions_df = _sessions_page(int(page), SESSIONS_PAGE_SIZE)
         display_df = format_sessions_table(sessions_df)
         st.dataframe(
             display_df,
@@ -291,8 +320,7 @@ with col_table:
                 ),
             },
         )
-    else:
-        st.info("No sessions found. Run build_sessions.py first.")
+        st.caption(f"Page {int(page)} of {total_pages} — {total_sessions} total sessions")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -327,9 +355,7 @@ else:
         if has_data:
             day_plays = _plays_for_day(selected_day)
 
-            sessions_df_all = _sessions()
-            sessions_df_all["date"] = pd.to_datetime(sessions_df_all["start_time"]).dt.date
-            day_sessions = sessions_df_all[sessions_df_all["date"] == selected_day]
+            day_sessions = _sessions_for_day(selected_day)
 
             n_plays = len(day_plays)
             total_min = float(day_plays["duration_minutes"].sum())
