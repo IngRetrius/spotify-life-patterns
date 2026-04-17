@@ -16,15 +16,17 @@ Uso:
     python ingestion/ingest_artists.py
 """
 
+import os
+import re
 import sys
 import time
+
 import psycopg2
 import psycopg2.extras
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 from spotipy.exceptions import SpotifyException
 from dotenv import load_dotenv
-import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -36,6 +38,11 @@ SPOTIFY_SCOPE       = "user-read-recently-played"
 ARTISTS_BATCH       = 50
 MAX_RETRY_ATTEMPTS  = 3
 RETRY_BACKOFF_BASE  = 2
+
+# Spotify artist IDs son base62 de 22 caracteres.
+# Cualquier cosa distinta (p.ej. 'spotify:local:...', IDs truncados)
+# hara que /v1/artists responda 400 y aborte el batch completo.
+SPOTIFY_ID_RE = re.compile(r"^[0-9A-Za-z]{22}$")
 
 
 # ── Conexiones ───────────────────────────────────────────────────────────────
@@ -125,10 +132,11 @@ def fetch_artists(sp: spotipy.Spotify, artist_ids: list[str], fallback_names: di
                 wait = int(e.headers.get("Retry-After", RETRY_BACKOFF_BASE ** attempt))
                 print(f"  Rate limit (429). Esperando {wait}s...")
                 time.sleep(wait)
-            elif e.http_status == 403:
-                # Endpoint restringido (cambios API Spotify 2024)
-                # Usamos el nombre que ya tenemos en raw_plays como fallback
-                print(f"  Endpoint /artists no disponible (403). Guardando nombre desde raw_plays.")
+            elif e.http_status in (400, 403):
+                # 403: endpoint restringido (cambios API Spotify 2024).
+                # 400: algun ID del batch es invalido (p.ej. local file slipped past validation).
+                # En ambos casos, fallback: nombre desde raw_plays, genres/popularity NULL.
+                print(f"  Endpoint /artists rechazo el batch (HTTP {e.http_status}). Guardando nombres desde raw_plays.")
                 return [{"artist_id": aid,
                          "name": fallback_names.get(aid, aid),
                          "genres": None,
@@ -164,9 +172,25 @@ def run() -> None:
         fallback_names = {p["artist_id"]: p["artist_name"] for p in pending}
         artist_ids     = list(fallback_names.keys())
 
-        print(f"{len(artist_ids)} artistas sin metadata. Procesando en batches de {ARTISTS_BATCH}...")
+        # Pre-filtrar: IDs que no matchean base62-22 iran directo al fallback,
+        # sin pasar por /artists (evita 400 que aborta el batch entero).
+        valid_ids   = [aid for aid in artist_ids if SPOTIFY_ID_RE.match(aid)]
+        invalid_ids = [aid for aid in artist_ids if not SPOTIFY_ID_RE.match(aid)]
 
-        for i, batch in enumerate(chunk(artist_ids, ARTISTS_BATCH)):
+        if invalid_ids:
+            print(f"{len(invalid_ids)} artist_ids invalidos (no base62-22). Guardando nombre desde raw_plays.")
+            fallback_rows = [{"artist_id": aid,
+                              "name": fallback_names.get(aid, aid),
+                              "genres": None,
+                              "popularity": None}
+                             for aid in invalid_ids]
+            inserted = upsert_artists(cursor, fallback_rows)
+            conn.commit()
+            total_inserted += inserted
+
+        print(f"{len(valid_ids)} artistas sin metadata (validos). Procesando en batches de {ARTISTS_BATCH}...")
+
+        for i, batch in enumerate(chunk(valid_ids, ARTISTS_BATCH)):
             print(f"\n  Batch {i + 1} ({len(batch)} artistas)...")
             artists  = fetch_artists(sp, batch, fallback_names)
             inserted = upsert_artists(cursor, artists)
