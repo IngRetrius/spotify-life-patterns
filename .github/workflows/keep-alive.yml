@@ -1,0 +1,19 @@
+name: Streamlit Keep-Alive
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'   # every 5 minutes
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - name: Ping Streamlit dashboard
+        run: |
+          curl --fail --silent --show-error --location \
+            --user-agent "github-actions-keepalive" \
+            --max-time 60 \
+            https://spotify-life-patterns.streamlit.app/
