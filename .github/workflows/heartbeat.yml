@@ -1,0 +1,40 @@
+name: Repo Heartbeat
+
+# GitHub disables scheduled workflows after 60 days of repo inactivity.
+# This job pushes a tiny commit once a month so the cron stays alive even
+# during quiet periods. Uses [skip ci] so it does not trigger the ingest
+# pipeline or the keep-alive workflow.
+
+on:
+  schedule:
+    - cron: '0 9 1 * *'   # 1st of each month at 09:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Update heartbeat timestamp
+        run: |
+          mkdir -p .github
+          date -u '+%Y-%m-%d %H:%M:%S UTC' > .github/last-heartbeat.txt
+
+      - name: Commit and push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet .github/last-heartbeat.txt; then
+            echo "No change in heartbeat file — skipping commit"
+            exit 0
+          fi
+          git add .github/last-heartbeat.txt
+          git commit -m "chore: monthly heartbeat [skip ci]"
+          git push origin HEAD:main
