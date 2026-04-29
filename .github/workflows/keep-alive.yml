@@ -13,7 +13,17 @@ jobs:
     steps:
       - name: Ping Streamlit dashboard
         run: |
-          curl --fail --silent --show-error --location \
+          status=$(curl --silent --show-error \
             --user-agent "github-actions-keepalive" \
-            --max-time 60 \
-            https://spotify-life-patterns.streamlit.app/
+            --max-time 30 \
+            --output /dev/null \
+            --write-out "%{http_code}" \
+            https://spotify-life-patterns.streamlit.app/)
+          echo "HTTP status: $status"
+          # Accept any 2xx/3xx — Streamlit Cloud may 302 to the wake page
+          # when sleeping, which is fine: the request still registers as
+          # traffic and resets the inactivity timer.
+          if [ "$status" -lt 200 ] || [ "$status" -ge 500 ]; then
+            echo "Unexpected status $status — server may be down"
+            exit 1
+          fi
