@@ -41,6 +41,9 @@ from dashboard.queries import (
     load_top_artists,
     load_diversity_by_month,
     load_dow_hour_heatmap,
+    load_confidence_distribution,
+    load_random_sessions_by_label,
+    load_session_tracks,
 )
 
 # -- Page config --------------------------------------------------------------
@@ -238,6 +241,11 @@ def _dow_hour_heatmap():
     return load_dow_hour_heatmap(_engine())
 
 
+@st.cache_data(ttl=timedelta(hours=3))
+def _confidence_distribution():
+    return load_confidence_distribution(_engine())
+
+
 # -- Helpers ------------------------------------------------------------------
 
 def section(title: str) -> None:
@@ -276,6 +284,40 @@ def format_sessions_table(df: pd.DataFrame) -> pd.DataFrame:
         "activity_label":   "Activity",
         "confidence_score": "Confidence",
     })
+
+
+@st.cache_resource(show_spinner=False)
+def _rules_source() -> str:
+    """
+    Read transformation/label_activities.py and slice the meaningful
+    portion (constants + rule functions + RULES dict) so the dashboard
+    can render the actual code in the 'Rules' panel.
+
+    Cached as a resource since the file changes only when the labeling
+    engine is updated — and the dashboard is restarted on deploy.
+    """
+    label_path = os.path.join(
+        os.path.dirname(__file__), "..", "transformation", "label_activities.py"
+    )
+    try:
+        with open(label_path, "r", encoding="utf-8") as f:
+            full = f.read()
+    except FileNotFoundError:
+        return "# Source file not found: transformation/label_activities.py"
+
+    # Slice from the first hour-window section through the RULES dict.
+    start_marker = "# ── Hour windows"  # box-drawing char already in source
+    end_marker = "def classify_session"
+    start = full.find(start_marker)
+    end = full.find(end_marker)
+    if start == -1 or end == -1:
+        # Fall back to a plain anchor (the box-drawing char varies).
+        start = full.find("SHOWER_HOURS")
+        end = full.find("def classify_session")
+        if start == -1 or end == -1:
+            return full  # last resort: show the whole file
+
+    return full[start:end].rstrip()
 
 
 # Column config shared by both sessions tables: plain numeric Confidence,
@@ -615,6 +657,58 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# -- 4a. Residual KPI: "What I cannot tell you" -------------------------------
+# Computed from the existing _activity_counts() data — no new query needed.
+# Promotes the most honest result of the project (the share of sessions
+# whose patterns the rules could NOT confidently classify) to the top of
+# the inference zone.
+
+_residual_df = _activity_counts()
+_residual_df = _residual_df[_residual_df["activity_label"].notna() & (_residual_df["activity_label"] != "")]
+
+if not _residual_df.empty:
+    _total = int(_residual_df["sessions"].sum())
+    _residual_mask = _residual_df["activity_label"].isin(["casual", "unknown", "unlabeled"])
+    _residual_n = int(_residual_df.loc[_residual_mask, "sessions"].sum())
+    _residual_pct = (100.0 * _residual_n / _total) if _total else 0.0
+
+    rk1, rk2, rk3 = st.columns([1, 1, 2], gap="large")
+    rk1.metric(
+        "Sessions without a clear pattern",
+        f"{_residual_pct:.0f}%",
+        help="Share of sessions labeled 'casual' or 'unknown' — the rules could not tie them to a routine.",
+    )
+    rk2.metric(
+        "Sessions classified",
+        f"{_total - _residual_n:,} / {_total:,}",
+        help="How many of your sessions the heuristic labeled as one of shower / gym / tasks.",
+    )
+    rk3.markdown(
+        """
+        <div class="warning-banner" style="background:#f3f6f9; border-left-color:#6c757d; color:#495057;">
+            <p style="margin:0;">A high residual is the most honest result of this project.
+            It means the rules <b>refused to guess</b> on sessions that did not match a known
+            duration / hour pattern — preferable to a confidently wrong label.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+# -- 4b. The Rules panel ------------------------------------------------------
+# Renders the actual source of transformation/label_activities.py so the
+# reader can see exactly what 'shower' or 'gym' means before reading any
+# of the inferred charts below.
+
+with st.expander("Show the labeling rules — see exactly what 'gym' or 'shower' means", expanded=False):
+    st.markdown(
+        "These are the **actual rules** that produced every label below. "
+        "No machine learning, no probability — just hand-coded thresholds on duration, "
+        "hour-of-day, and skip count."
+    )
+    st.code(_rules_source(), language="python")
+
+st.markdown("<br>", unsafe_allow_html=True)
+
 # -- 5. Sessions (INFERENCES) -------------------------------------------------
 
 section("Sessions")
@@ -681,6 +775,54 @@ with col_table:
         )
         st.caption(f"Page {int(page)} of {total_pages} - {total_sessions} total sessions")
 
+# -- 5b. Confidence-score distribution (INFERENCES) ---------------------------
+# Histogram of the raw confidence_score values. Designed to make visible
+# that the score clusters at predictable values (0.4, 0.5, 0.7) because
+# it is a sum of rule matches — not a calibrated probability.
+
+st.markdown("<br>", unsafe_allow_html=True)
+section("Confidence Distribution")
+
+col_hist, col_explain = st.columns([2, 1], gap="large")
+
+with col_hist:
+    conf_df = _confidence_distribution()
+
+    if not conf_df.empty:
+        fig_conf = px.histogram(
+            conf_df,
+            x="confidence_score",
+            nbins=20,
+            title="Confidence-score distribution across all labeled sessions",
+            color_discrete_sequence=["#f5a623"],
+        )
+        fig_conf.update_layout(
+            **CHART_LAYOUT,
+            xaxis_title="Confidence score",
+            yaxis_title="Sessions",
+            bargap=0.05,
+        )
+        fig_conf.update_traces(
+            hovertemplate="<b>Score: %{x:.2f}</b><br>Sessions: %{y}<extra></extra>"
+        )
+        st.plotly_chart(fig_conf, use_container_width=True)
+    else:
+        st.info("No confidence scores available yet.")
+
+with col_explain:
+    st.markdown(
+        """
+        **This is not a probability.**
+
+        A score of `0.65` does **not** mean *"I am 65% sure this is a shower."*
+        It means roughly **3 of 5 conditions** matched (e.g. duration band + correct hour
+        + zero skips).
+
+        Notice the clusters at `0.4`, `0.5`, `0.7` — those are the discrete sums
+        the rules can produce. A real probability distribution would be smooth.
+        """
+    )
+
 # -- 6. Activity by Hour (INFERENCES) -----------------------------------------
 
 st.markdown("<br>", unsafe_allow_html=True)
@@ -716,6 +858,87 @@ if not act_hour_df.empty:
     fig_act_hour.update_xaxes(tickvals=list(range(0, 24, 2)))
     fig_act_hour.for_each_trace(lambda t: t.update(name=t.name.capitalize()))
     st.plotly_chart(fig_act_hour, use_container_width=True)
+
+# -- 6b. Adversarial picker (INFERENCES) --------------------------------------
+# Pick a label, surface 3 random sessions of that label and list their
+# tracks. One contradictory example (a 'gym' session full of ballads;
+# a 'shower' session that turns out to be a podcast) does more for the
+# narrative than a paragraph of disclaimers.
+
+st.markdown("<br>", unsafe_allow_html=True)
+section("Adversarial Examples")
+
+st.markdown(
+    "Pick a label below to surface **three random sessions** that the rules tagged "
+    "with it — and the tracks that actually played. The most honest way to test a "
+    "heuristic is to look at what it caught."
+)
+
+# Build the label list from existing _activity_counts (ordered by count desc).
+_picker_df = _activity_counts()
+_picker_df = _picker_df[_picker_df["activity_label"].notna() & (_picker_df["activity_label"] != "")]
+_label_options = _picker_df["activity_label"].tolist()
+
+if _label_options:
+    col_pick, col_sample = st.columns([1, 3], gap="large")
+
+    with col_pick:
+        picked_label = st.selectbox(
+            "Activity label",
+            _label_options,
+            format_func=lambda s: s.capitalize(),
+        )
+        st.caption(
+            f"{int(_picker_df.loc[_picker_df['activity_label'] == picked_label, 'sessions'].iloc[0]):,} "
+            f"sessions tagged as **{picked_label}**."
+        )
+        roll = st.button("Roll 3 random sessions", use_container_width=True)
+
+    with col_sample:
+        # Use a session_state seed so the same selection survives reruns
+        # until the user explicitly rolls new ones.
+        if "adv_seed" not in st.session_state:
+            st.session_state.adv_seed = 0
+        if roll:
+            st.session_state.adv_seed += 1
+
+        # Cache key on (label, seed) so each roll is fresh but stable until rerolled.
+        @st.cache_data(ttl=timedelta(minutes=10))
+        def _adv_sessions(label: str, seed: int) -> pd.DataFrame:
+            return load_random_sessions_by_label(_engine(), label, n=3)
+
+        sample_df = _adv_sessions(picked_label, st.session_state.adv_seed)
+
+        if sample_df.empty:
+            st.info(f"No sessions tagged as '{picked_label}' yet.")
+        else:
+            for _, sess in sample_df.iterrows():
+                start = pd.to_datetime(sess["start_time"]).strftime("%b %d, %Y at %H:%M")
+                st.markdown(
+                    f"**{start}** &middot; "
+                    f"{sess['duration_minutes']:.1f} min &middot; "
+                    f"{int(sess['n_tracks'])} tracks &middot; "
+                    f"confidence `{float(sess['confidence_score']):.2f}`",
+                    unsafe_allow_html=True,
+                )
+
+                tracks = load_session_tracks(_engine(), sess["session_id"])
+                if tracks.empty:
+                    st.caption("(no tracks recorded for this session window)")
+                else:
+                    tracks_view = tracks.copy()
+                    tracks_view["played_at_local"] = pd.to_datetime(
+                        tracks_view["played_at_local"]
+                    ).dt.strftime("%H:%M")
+                    tracks_view = tracks_view.rename(columns={
+                        "played_at_local":  "Time",
+                        "track_name":       "Track",
+                        "artist_name":      "Artist",
+                        "duration_minutes": "Duration (min)",
+                    })
+                    st.dataframe(tracks_view, use_container_width=True, hide_index=True)
+
+                st.markdown("<hr style='margin:0.6rem 0;border:0;border-top:1px solid #e9ecef;'/>", unsafe_allow_html=True)
 
 # -- 7. Day Detail (drill-down: factual tracks + inferred sessions) -----------
 
