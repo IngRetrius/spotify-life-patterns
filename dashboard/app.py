@@ -46,6 +46,7 @@ from dashboard.queries import (
     load_session_tracks,
     load_sessions_for_sensitivity,
 )
+from dashboard.layer_demo import BAD_SQL, GOOD_SQL
 from dashboard.sensitivity import (
     reclassify,
     shifted_hour_set,
@@ -349,7 +350,8 @@ SESSIONS_COLUMN_CONFIG = {
 # Header
 st.markdown("## Spotify Life Patterns")
 st.markdown(
-    "Honest listening data + a case study in how naive transformations create false confidence."
+    "Honest listening data — a case study in how naive transformations create false confidence, "
+    "and in why medallion layer architecture earns its keep."
 )
 st.divider()
 
@@ -1124,7 +1126,75 @@ else:
         })
         st.dataframe(tracks_view, use_container_width=True, hide_index=True)
 
-# -- 8. Methodology (closing argument) ----------------------------------------
+# -- 8. Layer Architecture (engineering reflection) ---------------------------
+# Same business question, two implementations. The point is not which query
+# is "right" -- both produce the same rows -- but where the business logic
+# lives and what that costs you when rules change or bugs surface.
+
+st.markdown("<br>", unsafe_allow_html=True)
+section("Layer Architecture")
+
+st.markdown(
+    "**The same question, asked two ways: _\"list my listening sessions.\"_** "
+    "On the left, the dashboard reconstructs sessions from `raw_plays` on every "
+    "page load using window functions. On the right, it reads from the silver "
+    "table `sessions` that the pipeline has already built."
+)
+
+la_left, la_right = st.columns(2, gap="large")
+
+with la_left:
+    st.markdown("**Anti-pattern -- compute on read**")
+    st.caption("Business logic lives in the dashboard query.")
+    st.code(BAD_SQL, language="sql")
+
+with la_right:
+    st.markdown("**Pattern -- silver layer**")
+    st.caption("Business logic lives in `transformation/build_sessions.py`.")
+    st.code(GOOD_SQL, language="sql")
+
+st.markdown("<br>", unsafe_allow_html=True)
+st.markdown("**Trade-offs**")
+
+# Pure markdown table -- keeps the comparison readable without a DataFrame
+# round-trip and avoids any st.dataframe styling pitfalls (Streamlit 1.40.2).
+st.markdown(
+    """
+| Concern | Anti-pattern (compute on read) | Silver layer (read pre-computed) |
+|---|---|---|
+| Where business logic lives | Inside the SQL string in the dashboard | `transformation/build_sessions.py` |
+| Lines of SQL the dashboard owns | ~30 (CTEs, LAG, gap, numbering, GROUP BY) | 4 (`SELECT ... FROM sessions`) |
+| Timezone correctness | Must repeat `AT TIME ZONE 'America/Bogota'` in every query | Resolved once, in Python (`tz_convert`) |
+| Testability | SQL is hard to unit-test | `assign_sessions()` has pytest coverage |
+| Idempotency | None -- recomputed every render | `uuid5` session IDs + upsert |
+| Refresh cost | Window functions over the full `raw_plays` on every page load | Index scan on `sessions`, served from cache |
+| Cost of changing the rule (e.g. gap = 20 min) | Hunt down every query that re-implements it | Edit one constant: `SESSION_GAP_MINUTES` |
+"""
+)
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# Hero callout -- neutral grey/blue (NOT the orange warning-banner).
+# Reuses the same override pattern used for the residual KPI callout
+# around line 701 of this file.
+st.markdown(
+    """
+    <div class="warning-banner" style="background:#f3f6f9; border-left-color:#6c757d; color:#495057;">
+        <div class="warning-title" style="color:#343a40;">Why this matters: the timezone bug</div>
+        <p>The hours shown in the <code>sessions</code> table were originally in UTC instead
+        of Bogota local time (UTC&minus;5). Because session-building logic lives in
+        <b>one</b> place -- <code>transformation/build_sessions.py</code> -- the fix was a
+        single <code>tz_convert("America/Bogota")</code> call and a re-run of the pipeline.</p>
+        <p>If sessions were reconstructed on the fly inside the dashboard (the left-hand
+        query), the same fix would have to land in <i>every</i> query that touches time --
+        and any query that was missed would silently keep showing the wrong hour.
+        That is the cost of skipping the silver layer.</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+# -- 9. Methodology (closing argument) ----------------------------------------
 # Every chart in this dashboard rests on a chain of choices. This section
 # names them so the reader doesn't have to reverse-engineer them.
 
