@@ -44,6 +44,14 @@ from dashboard.queries import (
     load_confidence_distribution,
     load_random_sessions_by_label,
     load_session_tracks,
+    load_sessions_for_sensitivity,
+)
+from dashboard.sensitivity import (
+    reclassify,
+    shifted_hour_set,
+    SHOWER_HOURS_DEFAULT,
+    GYM_HOURS_DEFAULT,
+    NIGHT_STUDY_HOURS_DEFAULT,
 )
 
 # -- Page config --------------------------------------------------------------
@@ -244,6 +252,11 @@ def _dow_hour_heatmap():
 @st.cache_data(ttl=timedelta(hours=3))
 def _confidence_distribution():
     return load_confidence_distribution(_engine())
+
+
+@st.cache_data(ttl=timedelta(hours=3))
+def _sensitivity_sessions():
+    return load_sessions_for_sensitivity(_engine())
 
 
 # -- Helpers ------------------------------------------------------------------
@@ -940,6 +953,105 @@ if _label_options:
 
                 st.markdown("<hr style='margin:0.6rem 0;border:0;border-top:1px solid #e9ecef;'/>", unsafe_allow_html=True)
 
+# -- 6c. Sensitivity Analysis (INFERENCES) ------------------------------------
+# Reclassify all sessions under shifted hour windows and compare counts to
+# the canonical labels. Demonstrates that the labels are a direct function
+# of arbitrary thresholds — shift gym_hours by 1h and watch a chunk of
+# 'gym' sessions migrate to 'unknown'.
+
+st.markdown("<br>", unsafe_allow_html=True)
+section("Sensitivity Analysis")
+
+st.markdown(
+    "These are **the same rules from the panel above** with only the "
+    "hour windows shifted. Every other threshold (duration bands, skip "
+    "counts, confidence floor) is held fixed. The chart shows how many "
+    "labels change as you slide."
+)
+
+sens_df = _sensitivity_sessions()
+
+if sens_df.empty:
+    st.info("No sessions available for sensitivity analysis yet.")
+else:
+    sens_cols = st.columns([1, 1, 1, 2], gap="medium")
+    with sens_cols[0]:
+        shower_shift = st.slider("Shift shower hours", -3, 3, 0, key="sens_shower")
+    with sens_cols[1]:
+        gym_shift = st.slider("Shift gym hours", -3, 3, 0, key="sens_gym")
+    with sens_cols[2]:
+        night_shift = st.slider("Shift study hours", -3, 3, 0, key="sens_night")
+
+    # Baseline: reclassify with canonical thresholds (drift check vs DB).
+    baseline = reclassify(
+        sens_df,
+        shower_hours=SHOWER_HOURS_DEFAULT,
+        gym_hours=GYM_HOURS_DEFAULT,
+        night_study_hours=NIGHT_STUDY_HOURS_DEFAULT,
+    )
+
+    # Shifted: reclassify with slider-shifted hour sets.
+    shifted = reclassify(
+        sens_df,
+        shower_hours=shifted_hour_set(SHOWER_HOURS_DEFAULT, shower_shift),
+        gym_hours=shifted_hour_set(GYM_HOURS_DEFAULT, gym_shift),
+        night_study_hours=shifted_hour_set(NIGHT_STUDY_HOURS_DEFAULT, night_shift),
+    )
+
+    # Drift check: baseline vs the live labels in the DB.
+    drift = (baseline != sens_df["live_label"]).sum()
+    if drift > 0:
+        with sens_cols[3]:
+            st.warning(
+                f"Drift detected: {drift} of {len(sens_df)} sessions get a different "
+                "label when re-running the sensitivity port with the original "
+                "thresholds. The port in `dashboard/sensitivity.py` may have "
+                "diverged from `transformation/label_activities.py`.",
+                icon=":material/warning:",
+            )
+
+    # Compare baseline vs shifted in a side-by-side bar chart.
+    label_order = ["shower", "gym", "tasks", "casual", "unknown"]
+    baseline_counts = baseline.value_counts().reindex(label_order, fill_value=0)
+    shifted_counts = shifted.value_counts().reindex(label_order, fill_value=0)
+
+    compare_df = pd.DataFrame({
+        "Activity": [lbl.capitalize() for lbl in label_order] * 2,
+        "Sessions": list(baseline_counts.values) + list(shifted_counts.values),
+        "Scenario": ["Baseline"] * len(label_order) + ["Shifted"] * len(label_order),
+    })
+
+    pct_changed = 100.0 * (baseline != shifted).sum() / len(sens_df) if len(sens_df) else 0.0
+
+    chart_col, summary_col = st.columns([3, 1], gap="large")
+
+    with chart_col:
+        fig_sens = px.bar(
+            compare_df,
+            x="Activity",
+            y="Sessions",
+            color="Scenario",
+            barmode="group",
+            color_discrete_map={"Baseline": "#9E9E9E", "Shifted": "#f5a623"},
+            title="Label counts: baseline rules vs shifted hour windows",
+        )
+        fig_sens.update_layout(**CHART_LAYOUT, legend=dict(orientation="h", y=1.05, x=1, xanchor="right"))
+        st.plotly_chart(fig_sens, use_container_width=True)
+
+    with summary_col:
+        st.metric(
+            "Labels that changed",
+            f"{pct_changed:.0f}%",
+            help="Percentage of sessions that get a different label under the shifted thresholds.",
+        )
+        if shower_shift == 0 and gym_shift == 0 and night_shift == 0:
+            st.caption("Move a slider to see the rules' fragility.")
+        else:
+            st.caption(
+                "A label-engine that is robust to small parameter changes "
+                "would barely move. This one does."
+            )
+
 # -- 7. Day Detail (drill-down: factual tracks + inferred sessions) -----------
 
 st.markdown("<br>", unsafe_allow_html=True)
@@ -1011,6 +1123,61 @@ else:
             "duration_minutes": "Duration (min)",
         })
         st.dataframe(tracks_view, use_container_width=True, hide_index=True)
+
+# -- 8. Methodology (closing argument) ----------------------------------------
+# Every chart in this dashboard rests on a chain of choices. This section
+# names them so the reader doesn't have to reverse-engineer them.
+
+st.markdown("<br>", unsafe_allow_html=True)
+section("Methodology")
+
+meth_diagram, meth_assumptions = st.columns([3, 2], gap="large")
+
+with meth_diagram:
+    st.markdown("**Data lineage**")
+    st.graphviz_chart(
+        """
+        digraph lineage {
+            rankdir=TB;
+            bgcolor="transparent";
+            node [shape=box, style="rounded,filled", fontname="sans-serif",
+                  fontsize=11, color="#dee2e6", fillcolor="#f8f9fa"];
+            edge [fontname="sans-serif", fontsize=9, color="#6c757d", fontcolor="#6c757d"];
+
+            api      [label="Spotify Web API", fillcolor="#e8f5e9"];
+            raw      [label="raw_plays\\n(UTC, conn_country, duration_ms)", fillcolor="#e8f5e9"];
+            sess     [label="sessions\\n(30-min gap rule)", fillcolor="#fff3cd"];
+            feat     [label="session_features\\n(n_skips: <50% completion)", fillcolor="#fff3cd"];
+            lab      [label="activity_labels\\n(5 hand-coded rules)", fillcolor="#fde7e7"];
+            ui       [label="Dashboard", fillcolor="#e3f2fd"];
+
+            api  -> raw  [label="ingest_plays.py\\n(API restrictions)"];
+            raw  -> sess [label="build_sessions.py\\n(arbitrary 30-min boundary)"];
+            sess -> feat [label="compute_features.py"];
+            feat -> lab  [label="label_activities.py\\n(heuristic, NOT measurement)"];
+            lab  -> ui;
+            sess -> ui   [style=dashed];
+            raw  -> ui   [style=dashed];
+        }
+        """
+    )
+    st.caption(
+        "Green = factual ingestion. Yellow = derived with arbitrary parameters. "
+        "Red = heuristic inference. Dashed lines = data shown directly without classification."
+    )
+
+with meth_assumptions:
+    st.markdown("**Assumptions baked into the pipeline**")
+    st.markdown(
+        """
+        - **Session boundary = 30 min gap.** Not 20, not 45 — picked once, never validated.
+        - **Bogota timezone everywhere.** Assumes the listener never travels. Plays during trips get bucketed into Bogota local time even if the user was somewhere else.
+        - **No audio features.** Spotify restricted `/audio-features` and `/artists` for new developer apps in 2024, so BPM, energy, valence, and dominant genre are NULL. Every label leans on duration + hour + skips alone.
+        - **Skip threshold = 50% completion.** A track played to 49% counts as skipped; 51% counts as listened. Arbitrary cliff.
+        - **Behavior is consistent over time.** The same rules applied to every session in the dataset, even though the listener's habits in 2023 may differ from 2026.
+        - **Country = `conn_country` from Spotify.** Includes VPN noise; some plays previously had `conn_country = ZZ` and were dropped.
+        """
+    )
 
 # -- Footer -------------------------------------------------------------------
 
