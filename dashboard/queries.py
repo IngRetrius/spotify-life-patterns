@@ -422,6 +422,33 @@ def load_random_sessions_by_label(engine, label: str, n: int = 3) -> pd.DataFram
     return pd.read_sql(text(query), engine, params={"label": label, "n": n})
 
 
+def load_sessions_for_sensitivity(engine) -> pd.DataFrame:
+    """
+    All sessions joined with their features and current canonical label.
+
+    Used solely by the sensitivity panel, which re-classifies these rows
+    in-memory under shifted thresholds. ``live_label`` is included so the
+    panel can run a drift check against the parametrized labeler.
+    """
+    query = """
+        SELECT
+            s.session_id,
+            s.duration_minutes,
+            s.n_tracks,
+            s.hour_of_day,
+            s.day_of_week,
+            COALESCE(sf.n_skips, 0) AS n_skips,
+            al.activity_label       AS live_label
+        FROM sessions s
+        LEFT JOIN session_features sf ON s.session_id = sf.session_id
+        LEFT JOIN activity_labels  al ON s.session_id = al.session_id
+    """
+    df = pd.read_sql(query, engine)
+    df["n_skips"] = df["n_skips"].fillna(0).astype(int)
+    df["live_label"] = df["live_label"].fillna("unknown")
+    return df
+
+
 def load_session_tracks(engine, session_id: str) -> pd.DataFrame:
     """
     Tracks that played during a given session.
