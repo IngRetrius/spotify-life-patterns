@@ -37,6 +37,10 @@ from dashboard.queries import (
     load_available_dates,
     load_activity_by_hour,
     load_plays_by_country,
+    load_plays_by_month,
+    load_top_artists,
+    load_diversity_by_month,
+    load_dow_hour_heatmap,
 )
 
 # -- Page config --------------------------------------------------------------
@@ -133,6 +137,10 @@ DAY_LABELS = {
     3: "Thu", 4: "Fri", 5: "Sat", 6: "Sun",
 }
 
+# Y-axis labels for the dow x hour heatmap (Monday=0, matches the SQL
+# normalization in load_dow_hour_heatmap).
+DOW_LABELS_MON0 = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
 CHART_LAYOUT = dict(
     template="plotly_white",
     margin=dict(l=0, r=0, t=30, b=0),
@@ -208,6 +216,26 @@ def _plays_for_day(day):
 @st.cache_data(ttl=timedelta(hours=3))
 def _plays_by_country():
     return load_plays_by_country(_engine())
+
+
+@st.cache_data(ttl=timedelta(hours=3))
+def _plays_by_month():
+    return load_plays_by_month(_engine())
+
+
+@st.cache_data(ttl=timedelta(hours=3))
+def _top_artists():
+    return load_top_artists(_engine())
+
+
+@st.cache_data(ttl=timedelta(hours=3))
+def _diversity_by_month():
+    return load_diversity_by_month(_engine())
+
+
+@st.cache_data(ttl=timedelta(hours=3))
+def _dow_hour_heatmap():
+    return load_dow_hour_heatmap(_engine())
 
 
 # -- Helpers ------------------------------------------------------------------
@@ -286,26 +314,41 @@ col3.markdown(kpi_card(str(kpis["total_sessions"]), "Sessions Detected"), unsafe
 st.markdown("<br>", unsafe_allow_html=True)
 
 # -- 2. Listening Patterns (FACTS) --------------------------------------------
+# Four-row layout:
+#   Row 1: Plays by Month (full width, hero chart)
+#   Row 2: Top Tracks | Top Artists
+#   Row 3: Plays by Hour | Diversity by Month
+#   Row 4: Day-of-week x Hour heatmap (full width)
 
 section("Listening Patterns")
 
-col_hour, col_tracks = st.columns(2, gap="large")
+# -- Row 1: Plays by Month (hero) --
+month_df = _plays_by_month()
 
-with col_hour:
-    hour_df = _plays_by_hour()
-
-    fig_hour = px.bar(
-        hour_df,
-        x="hour",
+if not month_df.empty:
+    fig_month = px.bar(
+        month_df,
+        x="month",
         y="plays",
-        labels={"hour": "Hour of Day (Bogota)", "plays": "Plays"},
-        title="Plays by Hour of Day",
+        labels={"month": "Month (Bogota)", "plays": "Plays"},
+        title="Plays by Month",
         color_discrete_sequence=["#1DB954"],
+        custom_data=["minutes"],
     )
-    fig_hour.update_layout(**CHART_LAYOUT)
-    fig_hour.update_traces(hovertemplate="<b>%{x}:00</b><br>Plays: %{y}<extra></extra>")
-    fig_hour.update_xaxes(tickvals=list(range(0, 24, 2)))
-    st.plotly_chart(fig_hour, use_container_width=True)
+    fig_month.update_layout(**CHART_LAYOUT)
+    fig_month.update_traces(
+        hovertemplate=(
+            "<b>%{x|%b %Y}</b><br>"
+            "Plays: %{y:,}<br>"
+            "Minutes listened: %{customdata[0]:,.0f}<extra></extra>"
+        )
+    )
+    st.plotly_chart(fig_month, use_container_width=True)
+else:
+    st.info("No play data yet.")
+
+# -- Row 2: Top Tracks | Top Artists --
+col_tracks, col_artists = st.columns(2, gap="large")
 
 with col_tracks:
     tracks_df = _top_tracks()
@@ -332,6 +375,122 @@ with col_tracks:
         st.plotly_chart(fig_tracks, use_container_width=True)
     else:
         st.info("No play data found.")
+
+with col_artists:
+    artists_df = _top_artists()
+
+    if not artists_df.empty:
+        artists_df["label"] = artists_df["artist_name"].str.slice(0, 40)
+
+        fig_artists = px.bar(
+            artists_df.sort_values("play_count"),
+            x="play_count",
+            y="label",
+            orientation="h",
+            labels={"play_count": "Plays", "label": ""},
+            title="Top 10 Artists",
+            color_discrete_sequence=["#E8754C"],
+        )
+        fig_artists.update_layout(**CHART_LAYOUT)
+        fig_artists.update_traces(
+            hovertemplate="<b>%{y}</b><br>Plays: %{x}<extra></extra>"
+        )
+        st.plotly_chart(fig_artists, use_container_width=True)
+    else:
+        st.info("No artist data found.")
+
+# -- Row 3: Plays by Hour | Diversity by Month --
+col_hour, col_diversity = st.columns(2, gap="large")
+
+with col_hour:
+    hour_df = _plays_by_hour()
+
+    fig_hour = px.bar(
+        hour_df,
+        x="hour",
+        y="plays",
+        labels={"hour": "Hour of Day (Bogota)", "plays": "Plays"},
+        title="Plays by Hour of Day",
+        color_discrete_sequence=["#1DB954"],
+    )
+    fig_hour.update_layout(**CHART_LAYOUT)
+    fig_hour.update_traces(hovertemplate="<b>%{x}:00</b><br>Plays: %{y}<extra></extra>")
+    fig_hour.update_xaxes(tickvals=list(range(0, 24, 2)))
+    st.plotly_chart(fig_hour, use_container_width=True)
+
+with col_diversity:
+    div_df = _diversity_by_month()
+
+    if not div_df.empty:
+        fig_div = go.Figure()
+        fig_div.add_trace(go.Scatter(
+            x=div_df["month"],
+            y=div_df["unique_tracks"],
+            mode="lines+markers",
+            name="Unique tracks",
+            line=dict(color="#1DB954", width=2),
+            marker=dict(size=6),
+            hovertemplate="<b>%{x|%b %Y}</b><br>Unique tracks: %{y}<extra></extra>",
+        ))
+        fig_div.add_trace(go.Scatter(
+            x=div_df["month"],
+            y=div_df["unique_artists"],
+            mode="lines+markers",
+            name="Unique artists",
+            line=dict(color="#4C9BE8", width=2),
+            marker=dict(size=6),
+            hovertemplate="<b>%{x|%b %Y}</b><br>Unique artists: %{y}<extra></extra>",
+        ))
+        fig_div.update_layout(
+            **CHART_LAYOUT,
+            title="Diversity by Month",
+            xaxis_title="Month (Bogota)",
+            yaxis_title="Count",
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1,
+            ),
+        )
+        st.plotly_chart(fig_div, use_container_width=True)
+    else:
+        st.info("No diversity data yet.")
+
+# -- Row 4: Day-of-week x Hour heatmap (full width) --
+heat_df = _dow_hour_heatmap()
+
+if not heat_df.empty:
+    # Pivot from long to 7x24 matrix; rows = dow (Mon=0..Sun=6), cols = hour.
+    heat_matrix = (
+        heat_df
+        .pivot(index="dow", columns="hour", values="plays")
+        .reindex(index=range(7), columns=range(24))
+        .fillna(0)
+        .astype(int)
+    )
+
+    fig_heat = go.Figure(go.Heatmap(
+        z=heat_matrix.values,
+        x=list(range(24)),
+        y=DOW_LABELS_MON0,
+        colorscale="Greens",
+        hovertemplate=(
+            "<b>%{y} %{x}:00</b><br>"
+            "Plays: %{z}<extra></extra>"
+        ),
+        colorbar=dict(title="Plays", thickness=12, len=0.7),
+    ))
+    fig_heat.update_layout(
+        **CHART_LAYOUT,
+        title="Day of Week x Hour of Day",
+        xaxis_title="Hour (Bogota)",
+        yaxis_title=None,
+        xaxis=dict(tickvals=list(range(0, 24, 2)), tickmode="array"),
+        yaxis=dict(autorange="reversed"),  # Mon at the top
+    )
+    st.plotly_chart(fig_heat, use_container_width=True)
 
 # -- 3. Global Footprint (FACTS) ----------------------------------------------
 
