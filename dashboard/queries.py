@@ -383,3 +383,65 @@ def load_dow_hour_heatmap(engine) -> pd.DataFrame:
     df["plays"] = df["plays"].astype(int)
     return df
 
+
+# ── Inference critique queries (Phase 3) ──────────────────────────────────────
+
+def load_confidence_distribution(engine) -> pd.DataFrame:
+    """
+    Raw confidence_score values for every labeled session.
+
+    The dashboard renders these as a histogram to make visible that the
+    score is NOT a calibrated probability — it is a sum of rule matches
+    that clusters at predictable values (0.4, 0.5, 0.7, ...).
+    """
+    query = "SELECT confidence_score FROM activity_labels WHERE confidence_score IS NOT NULL"
+    return pd.read_sql(query, engine)
+
+
+def load_random_sessions_by_label(engine, label: str, n: int = 3) -> pd.DataFrame:
+    """
+    Pick N random sessions classified as ``label``.
+
+    Used by the adversarial picker: shows that what got tagged as 'gym'
+    is sometimes a podcast or a ballad playlist. Random ordering gives
+    every reload a chance to surface a counterexample.
+    """
+    query = """
+        SELECT
+            s.session_id,
+            s.start_time AT TIME ZONE 'America/Bogota' AS start_time,
+            s.duration_minutes,
+            s.n_tracks,
+            al.confidence_score
+        FROM sessions s
+        JOIN activity_labels al ON s.session_id = al.session_id
+        WHERE al.activity_label = :label
+        ORDER BY RANDOM()
+        LIMIT :n
+    """
+    return pd.read_sql(text(query), engine, params={"label": label, "n": n})
+
+
+def load_session_tracks(engine, session_id: str) -> pd.DataFrame:
+    """
+    Tracks that played during a given session.
+
+    Sessions don't store a per-track foreign key, so the join uses the
+    session's time window: any play whose ``played_at`` falls within
+    ``[start_time, start_time + duration_minutes)`` is considered part
+    of the session.
+    """
+    query = """
+        SELECT
+            (p.played_at AT TIME ZONE 'America/Bogota') AS played_at_local,
+            p.track_name,
+            p.artist_name,
+            ROUND(p.duration_ms / 60000.0, 2) AS duration_minutes
+        FROM raw_plays p
+        JOIN sessions s ON s.session_id = :session_id
+        WHERE p.played_at >= s.start_time
+          AND p.played_at <  s.start_time + (s.duration_minutes * INTERVAL '1 minute')
+        ORDER BY p.played_at ASC
+    """
+    return pd.read_sql(text(query), engine, params={"session_id": session_id})
+
