@@ -282,3 +282,101 @@ def load_activity_by_hour(engine) -> pd.DataFrame:
     df = grid.merge(df, on=["hour", "activity_label"], how="left").fillna(0)
     df["sessions"] = df["sessions"].astype(int)
     return df
+
+
+def load_plays_by_month(engine) -> pd.DataFrame:
+    """
+    Plays and listening minutes per calendar month (America/Bogota).
+
+    Buckets `played_at` into Bogota-local months so the timeline reflects
+    the user's actual lived months, not UTC months.
+    """
+    query = """
+        SELECT
+            DATE_TRUNC('month', played_at AT TIME ZONE 'America/Bogota')::date AS month,
+            COUNT(*)                                                            AS plays,
+            ROUND(SUM(duration_ms) / 60000.0, 1)                                AS minutes
+        FROM raw_plays
+        GROUP BY month
+        ORDER BY month ASC
+    """
+    df = pd.read_sql(query, engine)
+    if df.empty:
+        return df
+    df["plays"] = df["plays"].astype(int)
+    df["minutes"] = df["minutes"].astype(float)
+    return df
+
+
+def load_top_artists(engine, limit: int = 10) -> pd.DataFrame:
+    """Top artists by total play count. Mirror of load_top_tracks."""
+    query = f"""
+        SELECT
+            artist_name,
+            COUNT(*) AS play_count
+        FROM raw_plays
+        GROUP BY artist_name
+        ORDER BY play_count DESC
+        LIMIT {limit}
+    """
+    return pd.read_sql(query, engine)
+
+
+def load_diversity_by_month(engine) -> pd.DataFrame:
+    """
+    Unique tracks and unique artists per month (America/Bogota).
+
+    The unique-track count uses ``track_name || '||' || artist_name`` so
+    two different songs that happen to share a title (across artists)
+    aren't collapsed into one. The literal ``'||'`` separator avoids
+    collisions where a track or artist name itself contains a pipe.
+    """
+    query = """
+        SELECT
+            DATE_TRUNC('month', played_at AT TIME ZONE 'America/Bogota')::date AS month,
+            COUNT(DISTINCT track_name || '||' || artist_name)                  AS unique_tracks,
+            COUNT(DISTINCT artist_name)                                        AS unique_artists
+        FROM raw_plays
+        GROUP BY month
+        ORDER BY month ASC
+    """
+    df = pd.read_sql(query, engine)
+    if df.empty:
+        return df
+    df["unique_tracks"] = df["unique_tracks"].astype(int)
+    df["unique_artists"] = df["unique_artists"].astype(int)
+    return df
+
+
+def load_dow_hour_heatmap(engine) -> pd.DataFrame:
+    """
+    Plays grouped by (day-of-week, hour-of-day) in America/Bogota.
+
+    Postgres ``EXTRACT(DOW)`` returns 0=Sunday..6=Saturday, but the rest
+    of this app uses Python's Monday=0 convention. The SQL normalizes to
+    Monday=0 with ``(dow + 6) % 7`` so the dashboard can index a single
+    DOW_LABELS list without translation.
+
+    The result is densified to a full 7x24 grid so the heatmap renders
+    as a complete matrix even when some (dow, hour) buckets are empty.
+    """
+    query = """
+        SELECT
+            ((EXTRACT(DOW  FROM played_at AT TIME ZONE 'America/Bogota')::int + 6) % 7) AS dow,
+            EXTRACT(HOUR FROM played_at AT TIME ZONE 'America/Bogota')::int             AS hour,
+            COUNT(*)                                                                    AS plays
+        FROM raw_plays
+        GROUP BY dow, hour
+        ORDER BY dow, hour
+    """
+    df = pd.read_sql(query, engine)
+
+    # Densify to a full 7x24 grid so missing buckets render as zero cells.
+    grid = (
+        pd.MultiIndex.from_product([range(7), range(24)], names=["dow", "hour"])
+        .to_frame(index=False)
+    )
+    df = grid.merge(df, on=["dow", "hour"], how="left").fillna(0)
+    df["plays"] = df["plays"].astype(int)
+    return df
+
