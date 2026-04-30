@@ -360,9 +360,12 @@ def load_dow_hour_heatmap(engine) -> pd.DataFrame:
     The result is densified to a full 7x24 grid so the heatmap renders
     as a complete matrix even when some (dow, hour) buckets are empty.
     """
+    # MOD() is used instead of `%` because pandas.read_sql passes raw queries
+    # through psycopg2's DBAPI cursor, which interprets `%` as a parameter
+    # placeholder. MOD(x, 7) is equivalent and free of that ambiguity.
     query = """
         SELECT
-            ((EXTRACT(DOW  FROM played_at AT TIME ZONE 'America/Bogota')::int + 6) % 7) AS dow,
+            MOD(EXTRACT(DOW  FROM played_at AT TIME ZONE 'America/Bogota')::int + 6, 7) AS dow,
             EXTRACT(HOUR FROM played_at AT TIME ZONE 'America/Bogota')::int             AS hour,
             COUNT(*)                                                                    AS plays
         FROM raw_plays
