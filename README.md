@@ -5,7 +5,9 @@
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/release/python-3120/)
 
 A personal data pipeline that infers daily activity patterns from Spotify listening history.
-Built end-to-end: from OAuth ingestion to a live, deployed dashboard.
+Built end-to-end: from OAuth ingestion to a live, deployed dashboard — and turned into
+a case study on **how naive transformations create false confidence** and **why medallion
+layer architecture earns its keep**.
 
 **Live dashboard:** https://spotify-life-patterns.streamlit.app/
 
@@ -100,6 +102,8 @@ spotify-life-patterns/
 |- dashboard/
 |   |- app.py                    Streamlit layout and UI
 |   |- queries.py                SQL queries (separated from UI logic)
+|   |- sensitivity.py            Parametrized labeler for the Sensitivity panel
+|   |- layer_demo.py             Didactic SQL strings for the Layer Architecture section
 |
 |- db/
 |   |- migrate.py                Lightweight migration runner (no extra dependencies)
@@ -148,6 +152,23 @@ with zero skips is *not* a shower — it's brief casual listening that the
 ML phase when enough labeled sessions exist to train a classifier.
 
 For more detail: [`docs/decisions/transformation_layer.md`](docs/decisions/transformation_layer.md)
+
+---
+
+## Dashboard
+
+The dashboard is intentionally structured as an argument, not a feature dump.
+It walks the reader from **what the data says** to **what the inferences are
+worth** to **why the architecture is shaped the way it is**.
+
+| Zone | Sections | Purpose |
+|---|---|---|
+| 1. Facts | Overview, Listening Patterns, Global Footprint | Raw Spotify data — counts, charts, geography. |
+| 2. Inferences | Sessions, Activity by Hour, **Sensitivity Analysis** | Heuristic labels and the gates that decide them. The Sensitivity panel exposes the **confidence floor** and the **shower / gym duration bands** so the reader can see how easily the labels flip when arbitrary thresholds shift. |
+| 3. Reflection | **Layer Architecture**, Methodology | Engineering argument: the same business question (*list my listening sessions*) shown two ways — a window-function reconstruction from `raw_plays` (anti-pattern) versus a `SELECT FROM sessions` against the silver layer. A trade-off table makes the cost of skipping the silver layer explicit, and ties the in-flight timezone bug to that argument. |
+
+The narrative deliberately avoids a "drill-down" zone: every section advances
+either the *false confidence* thesis or the *layer architecture* thesis.
 
 ---
 
