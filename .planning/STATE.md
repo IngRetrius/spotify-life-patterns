@@ -5,7 +5,7 @@ milestone_name: milestone
 status: executing
 stopped_at: Phase 1 context gathered
 last_updated: "2026-04-16T04:07:20.117Z"
-last_activity: 2026-04-30 -- Completed quick task 260429-rmq: dashboard narrative pivot phase 3 (inference critique zone)
+last_activity: 2026-04-30 -- Completed quick task 260429-sau: dashboard narrative pivot phase 4 (sensitivity + methodology)
 progress:
   total_phases: 2
   completed_phases: 0
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-04-15)
 Phase: 01 (timezone-fix) — EXECUTING
 Plan: 1 of 2
 Status: Executing Phase 01
-Last activity: 2026-04-30 -- Completed quick task 260429-rmq: dashboard narrative pivot phase 3 (inference critique zone)
+Last activity: 2026-04-30 -- Completed quick task 260429-sau: dashboard narrative pivot phase 4 (sensitivity + methodology)
 
 Progress: [██░░░░░░░░] 0%
 
@@ -81,6 +81,7 @@ None yet.
 | 260429-lyn | Phase 1 narrative pivot: remove misleading dashboard elements | 2026-04-29 | a6e1ef8 | [260429-lyn-phase-1-narrative-pivot-remove-misleadin](./quick/260429-lyn-phase-1-narrative-pivot-remove-misleadin/) |
 | 260429-rfu | Phase 2 narrative pivot: 4 factual aggregate charts (plays-by-month, top artists, diversity, dow-hour heatmap) | 2026-04-30 | 9faa014 | [260429-rfu-phase-2-narrative-pivot-add-factual-aggr](./quick/260429-rfu-phase-2-narrative-pivot-add-factual-aggr/) |
 | 260429-rmq | Phase 3 narrative pivot: inference critique zone (residual KPI, rules panel, confidence histogram, adversarial picker) | 2026-04-30 | fffa574 | [260429-rmq-phase-3-narrative-pivot-inference-critiq](./quick/260429-rmq-phase-3-narrative-pivot-inference-critiq/) |
+| 260429-sau | Phase 4 narrative pivot: sensitivity analysis + methodology (lineage diagram, assumptions list) | 2026-04-30 | 22c9b8c | [260429-sau-phase-4-narrative-pivot-sensitivity-anal](./quick/260429-sau-phase-4-narrative-pivot-sensitivity-anal/) |
 
 ## Deferred Items
 
