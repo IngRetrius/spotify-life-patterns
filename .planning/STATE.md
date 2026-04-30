@@ -5,7 +5,7 @@ milestone_name: milestone
 status: executing
 stopped_at: Phase 1 context gathered
 last_updated: "2026-04-16T04:07:20.117Z"
-last_activity: 2026-04-29 -- Completed quick task 260429-lyn: dashboard narrative pivot phase 1
+last_activity: 2026-04-30 -- Completed quick task 260429-rfu: dashboard narrative pivot phase 2 (4 factual charts)
 progress:
   total_phases: 2
   completed_phases: 0
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-04-15)
 Phase: 01 (timezone-fix) — EXECUTING
 Plan: 1 of 2
 Status: Executing Phase 01
-Last activity: 2026-04-29 -- Completed quick task 260429-lyn: dashboard narrative pivot phase 1
+Last activity: 2026-04-30 -- Completed quick task 260429-rfu: dashboard narrative pivot phase 2 (4 factual charts)
 
 Progress: [██░░░░░░░░] 0%
 
@@ -79,6 +79,7 @@ None yet.
 | 260416-stl | Fix ingest_artists.py: handle Spotify 400 + pre-filter invalid artist_ids | 2026-04-17 | e2d3dcc | [260416-stl-fix-ingest-artists-py-handle-spotify-400](./quick/260416-stl-fix-ingest-artists-py-handle-spotify-400/) |
 | 260416-t7v | Paginate Sessions table + SQL-scoped Day Detail query | 2026-04-17 | 490d5c3 | [260416-t7v-paginate-sessions-table-and-query-sessio](./quick/260416-t7v-paginate-sessions-table-and-query-sessio/) |
 | 260429-lyn | Phase 1 narrative pivot: remove misleading dashboard elements | 2026-04-29 | a6e1ef8 | [260429-lyn-phase-1-narrative-pivot-remove-misleadin](./quick/260429-lyn-phase-1-narrative-pivot-remove-misleadin/) |
+| 260429-rfu | Phase 2 narrative pivot: 4 factual aggregate charts (plays-by-month, top artists, diversity, dow-hour heatmap) | 2026-04-30 | 9faa014 | [260429-rfu-phase-2-narrative-pivot-add-factual-aggr](./quick/260429-rfu-phase-2-narrative-pivot-add-factual-aggr/) |
 
 ## Deferred Items
 
