@@ -305,7 +305,7 @@ with col_hour:
     fig_hour.update_layout(**CHART_LAYOUT)
     fig_hour.update_traces(hovertemplate="<b>%{x}:00</b><br>Plays: %{y}<extra></extra>")
     fig_hour.update_xaxes(tickvals=list(range(0, 24, 2)))
-    st.plotly_chart(fig_hour, use_container_width=True)
+    st.plotly_chart(fig_hour, width="stretch")
 
 with col_tracks:
     tracks_df = _top_tracks()
@@ -329,7 +329,7 @@ with col_tracks:
         fig_tracks.update_traces(
             hovertemplate="<b>%{y}</b><br>Plays: %{x}<extra></extra>"
         )
-        st.plotly_chart(fig_tracks, use_container_width=True)
+        st.plotly_chart(fig_tracks, width="stretch")
     else:
         st.info("No play data found.")
 
@@ -404,7 +404,7 @@ if not country_df.empty:
                 "Minutes listened: %{customdata[1]:,.0f}<extra></extra>"
             )
         )
-        st.plotly_chart(fig_map, use_container_width=True)
+        st.plotly_chart(fig_map, width="stretch")
 
     with col_bar:
         fig_country = px.bar(
@@ -431,7 +431,7 @@ if not country_df.empty:
             textposition="outside",
             hovertemplate="<b>%{y}</b><br>Plays: %{x:,}<extra></extra>",
         )
-        st.plotly_chart(fig_country, use_container_width=True)
+        st.plotly_chart(fig_country, width="stretch")
 
 # -- 4. Warning banner (transition into INFERENCE zone) -----------------------
 
@@ -490,7 +490,7 @@ with col_chart:
             yaxis=dict(dtick=1),
             showlegend=False,
         )
-        st.plotly_chart(fig_act, use_container_width=True)
+        st.plotly_chart(fig_act, width="stretch")
     else:
         st.info("No activity labels found. Run label_activities.py first.")
 
@@ -513,7 +513,7 @@ with col_table:
         display_df = format_sessions_table(sessions_df)
         st.dataframe(
             display_df,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config=SESSIONS_COLUMN_CONFIG,
         )
@@ -553,7 +553,7 @@ if not act_hour_df.empty:
     )
     fig_act_hour.update_xaxes(tickvals=list(range(0, 24, 2)))
     fig_act_hour.for_each_trace(lambda t: t.update(name=t.name.capitalize()))
-    st.plotly_chart(fig_act_hour, use_container_width=True)
+    st.plotly_chart(fig_act_hour, width="stretch")
 
 # -- 7. Day Detail (drill-down: factual tracks + inferred sessions) -----------
 
@@ -609,7 +609,7 @@ else:
             day_display = format_sessions_table(day_sessions)
             st.dataframe(
                 day_display,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config=SESSIONS_COLUMN_CONFIG,
             )
@@ -625,7 +625,7 @@ else:
             "artist_name":      "Artist",
             "duration_minutes": "Duration (min)",
         })
-        st.dataframe(tracks_view, use_container_width=True, hide_index=True)
+        st.dataframe(tracks_view, width="stretch", hide_index=True)
 
 # -- Footer -------------------------------------------------------------------
 
