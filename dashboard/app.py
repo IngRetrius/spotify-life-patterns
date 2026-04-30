@@ -465,6 +465,10 @@ col_chart, col_table = st.columns([1, 2], gap="large")
 with col_chart:
     act_df = _activity_counts()
 
+    # Drop NULL/empty activity_label rows that GROUP BY would otherwise render
+    # as a tiny ghost bar pinned to the y-axis.
+    act_df = act_df[act_df["activity_label"].notna() & (act_df["activity_label"] != "")]
+
     if not act_df.empty:
         # Map colors; default grey for any unknown label
         bar_colors = [ACTIVITY_COLORS.get(lbl, "#9E9E9E") for lbl in act_df["activity_label"]]
@@ -487,7 +491,6 @@ with col_chart:
             title="Sessions by Activity",
             xaxis_title=None,
             yaxis_title="Sessions",
-            yaxis=dict(dtick=1),
             showlegend=False,
         )
         st.plotly_chart(fig_act, use_container_width=True)
