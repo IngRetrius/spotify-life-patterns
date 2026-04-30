@@ -1145,19 +1145,35 @@ with meth_diagram:
             edge [fontname="sans-serif", fontsize=9, color="#6c757d", fontcolor="#6c757d"];
 
             api      [label="Spotify Web API", fillcolor="#e8f5e9"];
-            raw      [label="raw_plays\\n(UTC, conn_country, duration_ms)", fillcolor="#e8f5e9"];
-            sess     [label="sessions\\n(30-min gap rule)", fillcolor="#fff3cd"];
-            feat     [label="session_features\\n(n_skips: <50% completion)", fillcolor="#fff3cd"];
-            lab      [label="activity_labels\\n(5 hand-coded rules)", fillcolor="#fde7e7"];
-            ui       [label="Dashboard", fillcolor="#e3f2fd"];
+            pipeline [label="Python pipeline\\n(ingest + transform scripts)", fillcolor="#e3f2fd"];
+            ui       [label="Dashboard\\n(Streamlit)", fillcolor="#e3f2fd"];
 
-            api  -> raw  [label="ingest_plays.py\\n(API restrictions)"];
-            raw  -> sess [label="build_sessions.py\\n(arbitrary 30-min boundary)"];
-            sess -> feat [label="compute_features.py"];
-            feat -> lab  [label="label_activities.py\\n(heuristic, NOT measurement)"];
-            lab  -> ui;
-            sess -> ui   [style=dashed];
-            raw  -> ui   [style=dashed];
+            subgraph cluster_supabase {
+                label="Supabase (PostgreSQL)";
+                style="rounded,dashed";
+                color="#6c757d";
+                fontname="sans-serif";
+                fontsize=11;
+                fontcolor="#495057";
+                bgcolor="#ffffff00";
+
+                raw  [label="raw_plays\\n(UTC, conn_country, duration_ms)", fillcolor="#e8f5e9"];
+                sess [label="sessions\\n(30-min gap rule)", fillcolor="#fff3cd"];
+                feat [label="session_features\\n(n_skips: <50% completion)", fillcolor="#fff3cd"];
+                lab  [label="activity_labels\\n(5 hand-coded rules)", fillcolor="#fde7e7"];
+            }
+
+            api      -> pipeline [label="ingest_plays.py\\n(API restrictions)"];
+            pipeline -> raw      [label="upsert"];
+            raw      -> pipeline [label="build_sessions.py\\n(arbitrary 30-min boundary)"];
+            pipeline -> sess     [label="upsert"];
+            sess     -> pipeline [label="compute_features.py"];
+            pipeline -> feat     [label="upsert"];
+            feat     -> pipeline [label="label_activities.py\\n(heuristic, NOT measurement)"];
+            pipeline -> lab      [label="upsert"];
+            lab      -> ui;
+            sess     -> ui       [style=dashed];
+            raw      -> ui       [style=dashed];
         }
         """
     )
