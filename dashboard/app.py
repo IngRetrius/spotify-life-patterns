@@ -3,8 +3,8 @@ Spotify Life Patterns - Dashboard
 
 Narrative structure (3 zones):
   1. Facts        - KPIs, Listening Patterns, Global Footprint (raw Spotify data)
-  2. Inferences   - Sessions + Activity by Hour (heuristic labels, NOT measurement)
-  3. Drill-down   - Day Detail (mix of factual tracks + inferred sessions)
+  2. Inferences   - Sessions, Activity by Hour, Sensitivity (heuristic labels, NOT measurement)
+  3. Reflection   - Layer Architecture, Methodology (engineering argument)
 
 Architecture notes:
   - queries.py holds all SQL logic; app.py is pure layout
@@ -29,12 +29,9 @@ from dashboard.queries import (
     load_kpis,
     load_sessions,
     count_sessions,
-    load_sessions_for_day,
     load_top_tracks,
     load_plays_by_hour,
     load_activity_counts,
-    load_plays_for_day,
-    load_available_dates,
     load_activity_by_hour,
     load_plays_by_country,
     load_plays_by_month,
@@ -49,7 +46,9 @@ from dashboard.queries import (
 from dashboard.layer_demo import BAD_SQL, GOOD_SQL
 from dashboard.sensitivity import (
     reclassify,
-    shifted_hour_set,
+    SHOWER_DURATION_DEFAULT,
+    GYM_DURATION_DEFAULT,
+    MIN_CONFIDENCE_DEFAULT,
     SHOWER_HOURS_DEFAULT,
     GYM_HOURS_DEFAULT,
     NIGHT_STUDY_HOURS_DEFAULT,
@@ -191,11 +190,6 @@ def _sessions_count() -> int:
 
 
 @st.cache_data(ttl=timedelta(hours=3))
-def _sessions_for_day(day):
-    return load_sessions_for_day(_engine(), day)
-
-
-@st.cache_data(ttl=timedelta(hours=3))
 def _top_tracks():
     return load_top_tracks(_engine())
 
@@ -211,18 +205,8 @@ def _activity_counts():
 
 
 @st.cache_data(ttl=timedelta(hours=3))
-def _available_dates():
-    return load_available_dates(_engine())
-
-
-@st.cache_data(ttl=timedelta(hours=3))
 def _activity_by_hour():
     return load_activity_by_hour(_engine())
-
-
-@st.cache_data(ttl=timedelta(hours=3))
-def _plays_for_day(day):
-    return load_plays_for_day(_engine(), day)
 
 
 @st.cache_data(ttl=timedelta(hours=3))
@@ -956,19 +940,22 @@ if _label_options:
                 st.markdown("<hr style='margin:0.6rem 0;border:0;border-top:1px solid #e9ecef;'/>", unsafe_allow_html=True)
 
 # -- 6c. Sensitivity Analysis (INFERENCES) ------------------------------------
-# Reclassify all sessions under shifted hour windows and compare counts to
-# the canonical labels. Demonstrates that the labels are a direct function
-# of arbitrary thresholds — shift gym_hours by 1h and watch a chunk of
-# 'gym' sessions migrate to 'unknown'.
+# Reclassify all sessions under shifted threshold parameters and compare
+# counts to the canonical labels. Demonstrates that the labels are a direct
+# function of arbitrary thresholds -- the duration gates and the confidence
+# floor are the parameters that actually decide labels, so this panel
+# exposes those instead of the (weakly-weighted) hour windows.
 
 st.markdown("<br>", unsafe_allow_html=True)
 section("Sensitivity Analysis")
 
 st.markdown(
-    "These are **the same rules from the panel above** with only the "
-    "hour windows shifted. Every other threshold (duration bands, skip "
-    "counts, confidence floor) is held fixed. The chart shows how many "
-    "labels change as you slide."
+    "These are **the same rules from the panel above** with three of the "
+    "real gates exposed: the **confidence floor** (the minimum score required "
+    "to assign a label at all), the **shower duration ceiling**, and the "
+    "**gym duration floor**. Move any slider and watch labels flip -- these "
+    "are the thresholds that actually decide whether a session becomes "
+    "'gym', 'shower', or 'unknown'."
 )
 
 sens_df = _sensitivity_sessions()
@@ -978,11 +965,27 @@ if sens_df.empty:
 else:
     sens_cols = st.columns([1, 1, 1, 2], gap="medium")
     with sens_cols[0]:
-        shower_shift = st.slider("Shift shower hours", -3, 3, 0, key="sens_shower")
+        conf_floor = st.slider(
+            "Confidence floor",
+            0.30, 0.70, float(MIN_CONFIDENCE_DEFAULT),
+            step=0.05,
+            key="sens_conf",
+            help="Minimum score required to assign a label. Below this, the session is 'unknown'. Default 0.40.",
+        )
     with sens_cols[1]:
-        gym_shift = st.slider("Shift gym hours", -3, 3, 0, key="sens_gym")
+        shower_max = st.slider(
+            "Shower duration ceiling (min)",
+            10, 30, int(SHOWER_DURATION_DEFAULT[1]),
+            key="sens_shower_max",
+            help="Upper bound of the shower duration band. Default 20. Tighten it and shower sessions migrate elsewhere.",
+        )
     with sens_cols[2]:
-        night_shift = st.slider("Shift study hours", -3, 3, 0, key="sens_night")
+        gym_min = st.slider(
+            "Gym duration floor (min)",
+            20, 50, int(GYM_DURATION_DEFAULT[0]),
+            key="sens_gym_min",
+            help="Lower bound of the gym duration band. Default 35. Loosen it and casual sessions become 'gym'.",
+        )
 
     # Baseline: reclassify with canonical thresholds (drift check vs DB).
     baseline = reclassify(
@@ -992,12 +995,15 @@ else:
         night_study_hours=NIGHT_STUDY_HOURS_DEFAULT,
     )
 
-    # Shifted: reclassify with slider-shifted hour sets.
+    # Shifted: reclassify with the slider-driven thresholds (real gates).
     shifted = reclassify(
         sens_df,
-        shower_hours=shifted_hour_set(SHOWER_HOURS_DEFAULT, shower_shift),
-        gym_hours=shifted_hour_set(GYM_HOURS_DEFAULT, gym_shift),
-        night_study_hours=shifted_hour_set(NIGHT_STUDY_HOURS_DEFAULT, night_shift),
+        shower_hours=SHOWER_HOURS_DEFAULT,
+        gym_hours=GYM_HOURS_DEFAULT,
+        night_study_hours=NIGHT_STUDY_HOURS_DEFAULT,
+        shower_duration=(SHOWER_DURATION_DEFAULT[0], shower_max),
+        gym_duration=(gym_min, GYM_DURATION_DEFAULT[1]),
+        min_confidence=conf_floor,
     )
 
     # Drift check: baseline vs the live labels in the DB.
@@ -1046,7 +1052,12 @@ else:
             f"{pct_changed:.0f}%",
             help="Percentage of sessions that get a different label under the shifted thresholds.",
         )
-        if shower_shift == 0 and gym_shift == 0 and night_shift == 0:
+        at_baseline = (
+            conf_floor == MIN_CONFIDENCE_DEFAULT
+            and shower_max == SHOWER_DURATION_DEFAULT[1]
+            and gym_min == GYM_DURATION_DEFAULT[0]
+        )
+        if at_baseline:
             st.caption("Move a slider to see the rules' fragility.")
         else:
             st.caption(
@@ -1054,79 +1065,7 @@ else:
                 "would barely move. This one does."
             )
 
-# -- 7. Day Detail (drill-down: factual tracks + inferred sessions) -----------
-
-st.markdown("<br>", unsafe_allow_html=True)
-section("Day Detail")
-
-dates_df = _available_dates()
-
-if dates_df.empty:
-    st.info("No play data available yet.")
-else:
-    available = pd.to_datetime(dates_df["day"]).dt.date
-    min_day, max_day = available.min(), available.max()
-    default_day = max_day  # open on the most recent day with data
-
-    col_picker, col_summary = st.columns([1, 3], gap="large")
-
-    with col_picker:
-        selected_day = st.date_input(
-            "Pick a day",
-            value=default_day,
-            min_value=min_day,
-            max_value=max_day,
-            help="Only days with listening activity are in range.",
-        )
-        has_data = selected_day in set(available)
-        if not has_data:
-            st.caption(f"No plays on {selected_day}. Try another date.")
-
-    with col_summary:
-        if has_data:
-            day_plays = _plays_for_day(selected_day)
-
-            day_sessions = _sessions_for_day(selected_day)
-
-            n_plays = len(day_plays)
-            total_min = float(day_plays["duration_minutes"].sum())
-            n_sessions = len(day_sessions)
-            top_activity = (
-                day_sessions["activity_label"].mode().iloc[0]
-                if not day_sessions.empty else "-"
-            )
-
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Plays",          n_plays)
-            m2.metric("Minutes",        f"{total_min:.0f}")
-            m3.metric("Sessions",       n_sessions)
-            m4.metric("Top activity",   top_activity.capitalize())
-
-    if has_data:
-        if not day_sessions.empty:
-            st.markdown("**Sessions that day**")
-            day_display = format_sessions_table(day_sessions)
-            st.dataframe(
-                day_display,
-                use_container_width=True,
-                hide_index=True,
-                column_config=SESSIONS_COLUMN_CONFIG,
-            )
-
-        st.markdown("**Tracks played that day**")
-        tracks_view = day_plays.copy()
-        tracks_view["played_at_local"] = pd.to_datetime(
-            tracks_view["played_at_local"]
-        ).dt.strftime("%H:%M")
-        tracks_view = tracks_view.rename(columns={
-            "played_at_local":  "Time",
-            "track_name":       "Track",
-            "artist_name":      "Artist",
-            "duration_minutes": "Duration (min)",
-        })
-        st.dataframe(tracks_view, use_container_width=True, hide_index=True)
-
-# -- 8. Layer Architecture (engineering reflection) ---------------------------
+# -- 7. Layer Architecture (engineering reflection) ---------------------------
 # Same business question, two implementations. The point is not which query
 # is "right" -- both produce the same rows -- but where the business logic
 # lives and what that costs you when rules change or bugs surface.
@@ -1194,7 +1133,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# -- 9. Methodology (closing argument) ----------------------------------------
+# -- 8. Methodology (closing argument) ----------------------------------------
 # Every chart in this dashboard rests on a chain of choices. This section
 # names them so the reader doesn't have to reverse-engineer them.
 
