@@ -1,10 +1,10 @@
 """
-Spotify Life Patterns — Dashboard
+Spotify Life Patterns - Dashboard
 
-Sections:
-  1. KPIs    — total plays, listening time, sessions, dominant activity
-  2. Sessions — activity breakdown chart + sessions detail table
-  3. Patterns — plays by hour of day + top 10 tracks
+Narrative structure (3 zones):
+  1. Facts        - KPIs, Listening Patterns, Global Footprint (raw Spotify data)
+  2. Inferences   - Sessions + Activity by Hour (heuristic labels, NOT measurement)
+  3. Drill-down   - Day Detail (mix of factual tracks + inferred sessions)
 
 Architecture notes:
   - queries.py holds all SQL logic; app.py is pure layout
@@ -39,7 +39,7 @@ from dashboard.queries import (
     load_plays_by_country,
 )
 
-# ── Page config ───────────────────────────────────────────────────────────────
+# -- Page config --------------------------------------------------------------
 
 st.set_page_config(
     page_title="Spotify Life Patterns",
@@ -47,7 +47,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# ── CSS ───────────────────────────────────────────────────────────────────────
+# -- CSS ----------------------------------------------------------------------
 
 st.markdown("""
 <style>
@@ -88,10 +88,36 @@ st.markdown("""
         margin-top: 4px;
     }
     .kpi-accent { color: #1DB954; }
+
+    /* Warning banner: introduces the inference zone (heuristic, not measurement) */
+    .warning-banner {
+        background: #fff8e1;
+        border-left: 4px solid #f5a623;
+        border-radius: 6px;
+        padding: 1rem 1.25rem;
+        margin: 0.5rem 0 1.25rem 0;
+        color: #5d4a00;
+        font-size: 0.92rem;
+        line-height: 1.5;
+    }
+    .warning-banner .warning-title {
+        font-size: 0.95rem;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        margin-bottom: 0.4rem;
+        color: #8a6500;
+    }
+    .warning-banner p { margin: 0.35rem 0; }
+    .warning-banner code {
+        background: #fff1c4;
+        padding: 1px 5px;
+        border-radius: 3px;
+        font-size: 0.88em;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Constants ─────────────────────────────────────────────────────────────────
+# -- Constants ----------------------------------------------------------------
 
 ACTIVITY_COLORS = {
     "shower":    "#4C9BE8",
@@ -113,7 +139,7 @@ CHART_LAYOUT = dict(
     font=dict(family="sans-serif", size=12, color="#495057"),
 )
 
-# ── Data loading ──────────────────────────────────────────────────────────────
+# -- Data loading -------------------------------------------------------------
 
 @st.cache_resource
 def _engine():
@@ -146,7 +172,6 @@ def _sessions_count() -> int:
 
 @st.cache_data(ttl=timedelta(hours=3))
 def _sessions_for_day(day):
-    # day is a datetime.date — cache keys on its ISO representation.
     return load_sessions_for_day(_engine(), day)
 
 
@@ -177,7 +202,6 @@ def _activity_by_hour():
 
 @st.cache_data(ttl=timedelta(hours=3))
 def _plays_for_day(day):
-    # day is a datetime.date — cache keys on its ISO representation.
     return load_plays_for_day(_engine(), day)
 
 
@@ -186,7 +210,7 @@ def _plays_by_country():
     return load_plays_by_country(_engine())
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# -- Helpers ------------------------------------------------------------------
 
 def section(title: str) -> None:
     """Renders a styled section header."""
@@ -226,17 +250,27 @@ def format_sessions_table(df: pd.DataFrame) -> pd.DataFrame:
     })
 
 
-# ── Layout ────────────────────────────────────────────────────────────────────
+# Column config shared by both sessions tables: plain numeric Confidence,
+# explicitly NOT a probability bar.
+SESSIONS_COLUMN_CONFIG = {
+    "Confidence": st.column_config.NumberColumn(
+        "Confidence",
+        format="%.2f",
+        help="Heuristic rule-match score, not a calibrated probability.",
+    ),
+}
+
+
+# -- Layout -------------------------------------------------------------------
 
 # Header
 st.markdown("## Spotify Life Patterns")
 st.markdown(
-    "Listening sessions inferred from Spotify history — "
-    "activities labeled with heuristic rules.",
+    "Honest listening data + a case study in how naive transformations create false confidence."
 )
 st.divider()
 
-# ── 1. KPIs ───────────────────────────────────────────────────────────────────
+# -- 1. Overview (FACTS) ------------------------------------------------------
 
 section("Overview")
 
@@ -244,167 +278,14 @@ kpis = _kpis()
 hours = kpis["total_minutes"] / 60
 time_str = f"{hours:.1f} h" if hours >= 1 else f"{kpis['total_minutes']:.0f} min"
 
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3 = st.columns(3)
 col1.markdown(kpi_card(f"{kpis['total_plays']:,}", "Total Plays"), unsafe_allow_html=True)
 col2.markdown(kpi_card(time_str, "Listening Time"), unsafe_allow_html=True)
 col3.markdown(kpi_card(str(kpis["total_sessions"]), "Sessions Detected"), unsafe_allow_html=True)
-col4.markdown(kpi_card(kpis["top_activity"].capitalize(), "Top Activity", accent=True), unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# ── 2. Sessions ───────────────────────────────────────────────────────────────
-
-section("Sessions")
-
-col_chart, col_table = st.columns([1, 2], gap="large")
-
-with col_chart:
-    act_df = _activity_counts()
-
-    if not act_df.empty:
-        # Map colors; default grey for any unknown label
-        bar_colors = [ACTIVITY_COLORS.get(lbl, "#9E9E9E") for lbl in act_df["activity_label"]]
-
-        fig_act = go.Figure(go.Bar(
-            x=act_df["activity_label"].str.capitalize(),
-            y=act_df["sessions"],
-            marker_color=bar_colors,
-            text=act_df["sessions"],
-            textposition="outside",
-            hovertemplate=(
-                "<b>%{x}</b><br>"
-                "Sessions: %{y}<br>"
-                "Avg confidence: %{customdata:.2f}<extra></extra>"
-            ),
-            customdata=act_df["avg_confidence"],
-        ))
-        fig_act.update_layout(
-            **CHART_LAYOUT,
-            title="Sessions by Activity",
-            xaxis_title=None,
-            yaxis_title="Sessions",
-            yaxis=dict(dtick=1),
-            showlegend=False,
-        )
-        st.plotly_chart(fig_act, use_container_width=True)
-    else:
-        st.info("No activity labels found. Run label_activities.py first.")
-
-with col_table:
-    total_sessions = _sessions_count()
-
-    if total_sessions == 0:
-        st.info("No sessions found. Run build_sessions.py first.")
-    else:
-        total_pages = max(1, (total_sessions + SESSIONS_PAGE_SIZE - 1) // SESSIONS_PAGE_SIZE)
-        page = st.number_input(
-            "Page",
-            min_value=1,
-            max_value=total_pages,
-            value=1,
-            step=1,
-            help=f"{total_sessions} sessions total, {SESSIONS_PAGE_SIZE} per page.",
-        )
-        sessions_df = _sessions_page(int(page), SESSIONS_PAGE_SIZE)
-        display_df = format_sessions_table(sessions_df)
-        st.dataframe(
-            display_df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Confidence": st.column_config.ProgressColumn(
-                    "Confidence",
-                    min_value=0.0,
-                    max_value=1.0,
-                    format="%.2f",
-                ),
-            },
-        )
-        st.caption(f"Page {int(page)} of {total_pages} — {total_sessions} total sessions")
-
-st.markdown("<br>", unsafe_allow_html=True)
-
-# ── 3. Day detail ─────────────────────────────────────────────────────────────
-
-section("Day Detail")
-
-dates_df = _available_dates()
-
-if dates_df.empty:
-    st.info("No play data available yet.")
-else:
-    available = pd.to_datetime(dates_df["day"]).dt.date
-    min_day, max_day = available.min(), available.max()
-    default_day = max_day  # open on the most recent day with data
-
-    col_picker, col_summary = st.columns([1, 3], gap="large")
-
-    with col_picker:
-        selected_day = st.date_input(
-            "Pick a day",
-            value=default_day,
-            min_value=min_day,
-            max_value=max_day,
-            help="Only days with listening activity are in range.",
-        )
-        has_data = selected_day in set(available)
-        if not has_data:
-            st.caption(f"No plays on {selected_day}. Try another date.")
-
-    with col_summary:
-        if has_data:
-            day_plays = _plays_for_day(selected_day)
-
-            day_sessions = _sessions_for_day(selected_day)
-
-            n_plays = len(day_plays)
-            total_min = float(day_plays["duration_minutes"].sum())
-            n_sessions = len(day_sessions)
-            top_activity = (
-                day_sessions["activity_label"].mode().iloc[0]
-                if not day_sessions.empty else "-"
-            )
-
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Plays",          n_plays)
-            m2.metric("Minutes",        f"{total_min:.0f}")
-            m3.metric("Sessions",       n_sessions)
-            m4.metric("Top activity",   top_activity.capitalize())
-
-    if has_data:
-        if not day_sessions.empty:
-            st.markdown("**Sessions that day**")
-            day_display = format_sessions_table(day_sessions)
-            st.dataframe(
-                day_display,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Confidence": st.column_config.ProgressColumn(
-                        "Confidence",
-                        min_value=0.0,
-                        max_value=1.0,
-                        format="%.2f",
-                    ),
-                },
-            )
-
-        st.markdown("**Tracks played that day**")
-        tracks_view = day_plays.copy()
-        tracks_view["played_at_local"] = pd.to_datetime(
-            tracks_view["played_at_local"]
-        ).dt.strftime("%H:%M")
-        tracks_view = tracks_view.rename(columns={
-            "played_at_local":  "Time",
-            "track_name":       "Track",
-            "artist_name":      "Artist",
-            "duration_minutes": "Duration (min)",
-        })
-        st.dataframe(tracks_view, use_container_width=True, hide_index=True)
-
-st.markdown("<br>", unsafe_allow_html=True)
-
-# ── 4. Patterns ───────────────────────────────────────────────────────────────
+# -- 2. Listening Patterns (FACTS) --------------------------------------------
 
 section("Listening Patterns")
 
@@ -432,7 +313,7 @@ with col_tracks:
     if not tracks_df.empty:
         # Truncate long track names for readability
         tracks_df["label"] = tracks_df.apply(
-            lambda r: f"{r['track_name'][:30]}  —  {r['artist_name'][:20]}", axis=1
+            lambda r: f"{r['track_name'][:30]}  -  {r['artist_name'][:20]}", axis=1
         )
 
         fig_tracks = px.bar(
@@ -452,43 +333,12 @@ with col_tracks:
     else:
         st.info("No play data found.")
 
-act_hour_df = _activity_by_hour()
-
-if not act_hour_df.empty:
-    fig_act_hour = px.bar(
-        act_hour_df,
-        x="hour",
-        y="sessions",
-        color="activity_label",
-        color_discrete_map=ACTIVITY_COLORS,
-        barmode="stack",
-        labels={
-            "hour":           "Hour of Day (Bogota)",
-            "sessions":       "Sessions",
-            "activity_label": "Activity",
-        },
-        title="Activity by Hour of Day",
-    )
-    fig_act_hour.update_layout(
-        **CHART_LAYOUT,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1,
-        ),
-    )
-    fig_act_hour.update_xaxes(tickvals=list(range(0, 24, 2)))
-    fig_act_hour.for_each_trace(lambda t: t.update(name=t.name.capitalize()))
-    st.plotly_chart(fig_act_hour, use_container_width=True)
-
-# ── 5. Global Footprint ───────────────────────────────────────────────────────
+# -- 3. Global Footprint (FACTS) ----------------------------------------------
 
 st.markdown("<br>", unsafe_allow_html=True)
 section("Global Footprint")
 
-# ISO alpha-2 → country name mapping for the countries in the dataset
+# ISO alpha-2 -> country name mapping for the countries in the dataset
 _COUNTRY_NAMES = {
     "CO": "Colombia",
     "US": "United States",
@@ -583,15 +433,204 @@ if not country_df.empty:
         )
         st.plotly_chart(fig_country, use_container_width=True)
 
-# ── Footer ────────────────────────────────────────────────────────────────────
+# -- 4. Warning banner (transition into INFERENCE zone) -----------------------
+
+st.markdown("<br>", unsafe_allow_html=True)
+st.markdown(
+    """
+    <div class="warning-banner">
+        <div class="warning-title">&#9888; Inferred Activities &mdash; Heuristic, Not Measurement</div>
+        <p>Everything below this line comes from <b>hand-coded rules</b>
+        (e.g., "5&ndash;9 AM + 5&ndash;15 min duration &rarr; shower"), not a trained model.
+        The "Confidence" column is a sum of rule matches, <b>not a calibrated probability</b>.</p>
+        <p>Read the next charts as a <b>transformation case study</b> &mdash; what
+        happens when you apply naive heuristics to a stream of plays &mdash; rather
+        than as ground truth about the listener's day.</p>
+        <p><b>Why the rules are this thin:</b> Spotify restricted the
+        <code>/audio-features</code> and <code>/artists</code> endpoints for new
+        developer apps in 2024, so BPM, energy, valence, and dominant genre are
+        stored as NULL. The label engine has only temporal signals (hour,
+        duration, skips) to work with.</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+# -- 5. Sessions (INFERENCES) -------------------------------------------------
+
+section("Sessions")
+
+col_chart, col_table = st.columns([1, 2], gap="large")
+
+with col_chart:
+    act_df = _activity_counts()
+
+    if not act_df.empty:
+        # Map colors; default grey for any unknown label
+        bar_colors = [ACTIVITY_COLORS.get(lbl, "#9E9E9E") for lbl in act_df["activity_label"]]
+
+        fig_act = go.Figure(go.Bar(
+            x=act_df["activity_label"].str.capitalize(),
+            y=act_df["sessions"],
+            marker_color=bar_colors,
+            text=act_df["sessions"],
+            textposition="outside",
+            hovertemplate=(
+                "<b>%{x}</b><br>"
+                "Sessions: %{y}<br>"
+                "Avg confidence: %{customdata:.2f}<extra></extra>"
+            ),
+            customdata=act_df["avg_confidence"],
+        ))
+        fig_act.update_layout(
+            **CHART_LAYOUT,
+            title="Sessions by Activity",
+            xaxis_title=None,
+            yaxis_title="Sessions",
+            yaxis=dict(dtick=1),
+            showlegend=False,
+        )
+        st.plotly_chart(fig_act, use_container_width=True)
+    else:
+        st.info("No activity labels found. Run label_activities.py first.")
+
+with col_table:
+    total_sessions = _sessions_count()
+
+    if total_sessions == 0:
+        st.info("No sessions found. Run build_sessions.py first.")
+    else:
+        total_pages = max(1, (total_sessions + SESSIONS_PAGE_SIZE - 1) // SESSIONS_PAGE_SIZE)
+        page = st.number_input(
+            "Page",
+            min_value=1,
+            max_value=total_pages,
+            value=1,
+            step=1,
+            help=f"{total_sessions} sessions total, {SESSIONS_PAGE_SIZE} per page.",
+        )
+        sessions_df = _sessions_page(int(page), SESSIONS_PAGE_SIZE)
+        display_df = format_sessions_table(sessions_df)
+        st.dataframe(
+            display_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config=SESSIONS_COLUMN_CONFIG,
+        )
+        st.caption(f"Page {int(page)} of {total_pages} - {total_sessions} total sessions")
+
+# -- 6. Activity by Hour (INFERENCES) -----------------------------------------
+
+st.markdown("<br>", unsafe_allow_html=True)
+section("Activity by Hour")
+
+act_hour_df = _activity_by_hour()
+
+if not act_hour_df.empty:
+    fig_act_hour = px.bar(
+        act_hour_df,
+        x="hour",
+        y="sessions",
+        color="activity_label",
+        color_discrete_map=ACTIVITY_COLORS,
+        barmode="stack",
+        labels={
+            "hour":           "Hour of Day (Bogota)",
+            "sessions":       "Sessions",
+            "activity_label": "Activity",
+        },
+        title="Activity by Hour of Day",
+    )
+    fig_act_hour.update_layout(
+        **CHART_LAYOUT,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+        ),
+    )
+    fig_act_hour.update_xaxes(tickvals=list(range(0, 24, 2)))
+    fig_act_hour.for_each_trace(lambda t: t.update(name=t.name.capitalize()))
+    st.plotly_chart(fig_act_hour, use_container_width=True)
+
+# -- 7. Day Detail (drill-down: factual tracks + inferred sessions) -----------
+
+st.markdown("<br>", unsafe_allow_html=True)
+section("Day Detail")
+
+dates_df = _available_dates()
+
+if dates_df.empty:
+    st.info("No play data available yet.")
+else:
+    available = pd.to_datetime(dates_df["day"]).dt.date
+    min_day, max_day = available.min(), available.max()
+    default_day = max_day  # open on the most recent day with data
+
+    col_picker, col_summary = st.columns([1, 3], gap="large")
+
+    with col_picker:
+        selected_day = st.date_input(
+            "Pick a day",
+            value=default_day,
+            min_value=min_day,
+            max_value=max_day,
+            help="Only days with listening activity are in range.",
+        )
+        has_data = selected_day in set(available)
+        if not has_data:
+            st.caption(f"No plays on {selected_day}. Try another date.")
+
+    with col_summary:
+        if has_data:
+            day_plays = _plays_for_day(selected_day)
+
+            day_sessions = _sessions_for_day(selected_day)
+
+            n_plays = len(day_plays)
+            total_min = float(day_plays["duration_minutes"].sum())
+            n_sessions = len(day_sessions)
+            top_activity = (
+                day_sessions["activity_label"].mode().iloc[0]
+                if not day_sessions.empty else "-"
+            )
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Plays",          n_plays)
+            m2.metric("Minutes",        f"{total_min:.0f}")
+            m3.metric("Sessions",       n_sessions)
+            m4.metric("Top activity",   top_activity.capitalize())
+
+    if has_data:
+        if not day_sessions.empty:
+            st.markdown("**Sessions that day**")
+            day_display = format_sessions_table(day_sessions)
+            st.dataframe(
+                day_display,
+                use_container_width=True,
+                hide_index=True,
+                column_config=SESSIONS_COLUMN_CONFIG,
+            )
+
+        st.markdown("**Tracks played that day**")
+        tracks_view = day_plays.copy()
+        tracks_view["played_at_local"] = pd.to_datetime(
+            tracks_view["played_at_local"]
+        ).dt.strftime("%H:%M")
+        tracks_view = tracks_view.rename(columns={
+            "played_at_local":  "Time",
+            "track_name":       "Track",
+            "artist_name":      "Artist",
+            "duration_minutes": "Duration (min)",
+        })
+        st.dataframe(tracks_view, use_container_width=True, hide_index=True)
+
+# -- Footer -------------------------------------------------------------------
 
 st.divider()
 st.caption(
     "Data pipeline: Spotify API -> Supabase (PostgreSQL) -> Streamlit  |  "
     "Activities labeled with heuristic rules (shower, gym, tasks, casual)"
-)
-st.caption(
-    "Note: audio features (BPM, energy, valence) and dominant genre are "
-    "stored as NULL — Spotify restricted /audio-features and /artists "
-    "for new developer apps in 2024. Labeling relies on temporal signals only."
 )
